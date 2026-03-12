@@ -110,12 +110,21 @@ DISCORD_BOT_TOKEN=...
 - Scopes:
   - `bot`
   - `applications.commands`
+<p align="center">
+  <img src="discord-scopes.png" alt="Discord OAuth2 scopes" width="520">
+</p>
+
 - Bot permissions:
   - `Send Messages`
   - `Embed Links`
   - `Read Message History`
   - `Use Slash Commands`
   - `Attach Files`
+
+
+<p align="center">
+  <img src="discord-bot-permissions.png" alt="Discord bot permissions" width="520">
+</p>
 
 생성된 URL을 열어서 원하는 Discord 서버에 bot을 초대합니다.
 
@@ -129,9 +138,18 @@ DISCORD_BOT_TOKEN=...
 
 - `DISCORD_GUILD_ID`
   - 서버 이름 우클릭 -> 서버 ID 복사
+<p align="center">
+  <img src="copy-server-id-kr.png" alt="Discord 서버 ID 복사" width="420">
+</p>
+
+
 - `ALLOWED_USER_IDS`
   - 사용자 우클릭 -> 사용자 ID 복사
   - 여러 명이면 쉼표로 구분 가능
+
+<p align="center">
+  <img src="copy-user-id-kr.png" alt="Discord 사용자 ID 복사" width="420">
+</p>
 
 예시:
 
@@ -181,6 +199,12 @@ SHOW_COST=false
 - Windows: `C:\Users\you\projects`
 
 이후 `/register api-server`를 입력하면 이 base directory 아래로 해석됩니다.
+
+간단한 예:
+
+- `BASE_PROJECT_DIR=/Users/you/projects`
+- `/register api-server`
+- 최종 경로: `/Users/you/projects/api-server`
 
 ## 6. 봇 시작
 

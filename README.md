@@ -90,7 +90,14 @@ cd codex-discord
 install.bat
 ```
 
-If you prefer a manual setup, follow [SETUP.md](SETUP.md).
+## Setup Guides
+
+| Language | Guide |
+|---|---|
+| English | [SETUP.md](SETUP.md) |
+| Korean | [docs/SETUP.kr.md](docs/SETUP.kr.md) |
+
+If you prefer manual setup or want the full Discord bot creation walkthrough, follow the setup guide.
 
 ## Quick Start
 
@@ -130,6 +137,20 @@ SHOW_COST=false
 # Windows
 win-start.bat
 ```
+
+## Setup Checklist
+
+Before the first real run, make sure you have done all of these:
+
+1. `codex login` on the same machine that will run the bot
+2. created a Discord application and bot
+3. enabled `MESSAGE CONTENT INTENT`
+4. invited the bot with `bot` and `applications.commands` scopes
+5. copied your server ID and allowed user ID
+6. filled `.env`
+7. started the platform launcher
+
+The full illustrated walkthrough is in [SETUP.md](SETUP.md).
 
 ## Commands
 

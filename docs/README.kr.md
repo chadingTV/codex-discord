@@ -90,7 +90,14 @@ cd codex-discord
 install.bat
 ```
 
-수동 설치가 필요하면 [설치 가이드](SETUP.kr.md)를 보면 됩니다.
+## 설치 가이드
+
+| 언어 | 문서 |
+|---|---|
+| English | [../SETUP.md](../SETUP.md) |
+| 한국어 | [SETUP.kr.md](SETUP.kr.md) |
+
+수동 설치가 필요하거나 Discord bot 생성 절차까지 한 번에 보고 싶으면 설치 가이드를 보면 됩니다.
 
 ## 빠른 시작
 
@@ -130,6 +137,20 @@ SHOW_COST=false
 # Windows
 win-start.bat
 ```
+
+## 시작 전 체크리스트
+
+실사용 전에 아래를 모두 끝내면 됩니다.
+
+1. 봇을 돌릴 머신에서 `codex login` 완료
+2. Discord 애플리케이션과 bot 생성
+3. `MESSAGE CONTENT INTENT` 활성화
+4. `bot`, `applications.commands` scope로 bot 초대
+5. 서버 ID와 허용 사용자 ID 복사
+6. `.env` 작성
+7. 플랫폼 실행 스크립트로 시작
+
+이미지 포함 전체 절차는 [SETUP.kr.md](SETUP.kr.md)에 정리돼 있습니다.
 
 ## 명령어
 

@@ -115,6 +115,14 @@ In `OAuth2 -> URL Generator`:
   - `Use Slash Commands`
   - `Attach Files`
 
+<p align="center">
+  <img src="docs/discord-scopes.png" alt="Discord OAuth2 scopes" width="520">
+</p>
+
+<p align="center">
+  <img src="docs/discord-bot-permissions.png" alt="Discord bot permissions" width="520">
+</p>
+
 Open the generated URL in your browser and invite the bot to your target server.
 
 ## 4. Get Discord IDs
@@ -130,6 +138,14 @@ Then collect:
 - `ALLOWED_USER_IDS`
   - right-click your user and copy user ID
   - you can provide multiple IDs separated by commas
+
+<p align="center">
+  <img src="docs/copy-server-id-en.png" alt="Copy Discord server ID" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/copy-user-id-en.png" alt="Copy Discord user ID" width="420">
+</p>
 
 Example:
 
@@ -179,6 +195,12 @@ Examples:
 - Windows: `C:\Users\you\projects`
 
 When you later run `/register api-server`, the bot resolves it under that base directory.
+
+Quick example:
+
+- `BASE_PROJECT_DIR=/Users/you/projects`
+- `/register api-server`
+- resolved path: `/Users/you/projects/api-server`
 
 ## 6. Start the Bot
 
