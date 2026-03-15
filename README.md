@@ -233,6 +233,7 @@ Practical note:
 
 - `./linux-start.sh` starts the bot via `systemd --user`
 - if a desktop session is available, it also starts the tray app
+- the tray menu can open a separate Linux control panel for status, usage, and bot controls
 - `./linux-start.sh --fg` runs foreground mode for debugging
 
 ### Windows

@@ -21,6 +21,7 @@ SERVICE_NAME = "codex-discord"
 BOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_PATH = os.path.join(BOT_DIR, ".env")
 LANG_PREF_FILE = os.path.join(BOT_DIR, ".tray-lang")
+PANEL_SCRIPT = os.path.join(BOT_DIR, "tray", "codex_control_panel.py")
 import urllib.request
 import json
 import re
@@ -152,10 +153,10 @@ def _strip_markdown(text):
 def fetch_release_notes():
     global cached_release_notes, cached_new_version
     try:
-        url = "https://api.github.com/repos/chadingTV/claudecode-discord/releases"
+        url = "https://api.github.com/repos/chadingTV/codex-discord/releases"
         req = urllib.request.Request(url)
         req.add_header("Accept", "application/vnd.github.v3+json")
-        req.add_header("User-Agent", "claudecode-discord-tray")
+        req.add_header("User-Agent", "codex-discord-tray")
         with urllib.request.urlopen(req, timeout=10) as response:
             releases = json.loads(response.read().decode())
 
@@ -202,6 +203,19 @@ def check_for_updates():
             fetch_release_notes()
     except Exception:
         update_available = False
+
+
+def repo_has_local_changes():
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=BOT_DIR,
+            capture_output=True,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
 
 
 def _show_update_confirmation():
@@ -271,8 +285,16 @@ def perform_update(icon, item):
     subprocess.run(["systemctl", "--user", "stop", SERVICE_NAME], capture_output=True)
     time.sleep(1)
 
+    stashed = False
+    if repo_has_local_changes():
+        subprocess.run(["git", "stash", "push", "-u", "-m", "codex-discord-auto-update"], cwd=BOT_DIR, capture_output=True)
+        stashed = True
+
     subprocess.run(["git", "pull", "origin", "main", "--tags"], cwd=BOT_DIR)
+    if stashed:
+        subprocess.run(["git", "stash", "pop"], cwd=BOT_DIR, capture_output=True)
     subprocess.run(["npm", "install"], cwd=BOT_DIR)
+    subprocess.run(["npm", "rebuild", "better-sqlite3"], cwd=BOT_DIR)
     subprocess.run(["npm", "run", "build"], cwd=BOT_DIR)
 
     # Regenerate systemd service file (node path may change)
@@ -338,12 +360,21 @@ def open_folder(icon, item):
     subprocess.Popen(["xdg-open", BOT_DIR])
 
 
+def open_control_panel(icon=None, item=None):
+    if not os.path.exists(PANEL_SCRIPT):
+        return
+    try:
+        subprocess.Popen([sys.executable, PANEL_SCRIPT], start_new_session=True)
+    except TypeError:
+        subprocess.Popen([sys.executable, PANEL_SCRIPT])
+
+
 def open_github(icon, item):
-    webbrowser.open("https://github.com/chadingTV/claudecode-discord")
+    webbrowser.open("https://github.com/chadingTV/codex-discord")
 
 
 def open_github_issues(icon, item):
-    webbrowser.open("https://github.com/chadingTV/claudecode-discord/issues")
+    webbrowser.open("https://github.com/chadingTV/codex-discord/issues")
 
 
 def edit_settings(icon, item):
@@ -416,14 +447,14 @@ def _edit_settings_gtk(icon=None):
 
     # Setup guide link
     link = Gtk.LinkButton.new_with_label(
-        "https://github.com/chadingTV/claudecode-discord/blob/main/SETUP.md",
+        "https://github.com/chadingTV/codex-discord/blob/main/SETUP.md",
         L("Open Setup Guide", "설정 가이드 열기")
     )
     link.set_halign(Gtk.Align.START)
     content.pack_start(link, False, False, 0)
 
     issue_link = Gtk.LinkButton.new_with_label(
-        "https://github.com/chadingTV/claudecode-discord/issues",
+        "https://github.com/chadingTV/codex-discord/issues",
         L("Bug Report / Feature Request (GitHub Issues)", "버그 신고 / 기능 요청 (GitHub Issues)")
     )
     issue_link.set_halign(Gtk.Align.START)
@@ -611,6 +642,11 @@ def manual_check_update(icon, item):
 def create_menu():
     running = is_running()
     has_env = is_env_configured()
+    control_panel_item = pystray.MenuItem(
+        L("Open Control Panel", "컨트롤 패널 열기"),
+        open_control_panel,
+        default=True,
+    )
 
     version_item = pystray.MenuItem(L("Version: ", "버전: ") + current_version, None, enabled=False)
     check_update_item = pystray.MenuItem(
@@ -639,11 +675,13 @@ def create_menu():
     )
 
     # GitHub link
-    github_item = pystray.MenuItem("GitHub: upstream repo", open_github)
+    github_item = pystray.MenuItem("GitHub: chadingTV/codex-discord", open_github)
     issues_item = pystray.MenuItem(L("Bug Report / Feature Request", "버그 신고 / 기능 요청"), open_github_issues)
 
     if not has_env:
         return pystray.Menu(
+            control_panel_item,
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Setup Required", "설정 필요"), None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Setup...", "설정..."), edit_settings),
@@ -662,6 +700,8 @@ def create_menu():
 
     if running:
         return pystray.Menu(
+            control_panel_item,
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Running", "실행 중"), None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Stop Bot", "봇 중지"), stop_bot),
@@ -684,6 +724,8 @@ def create_menu():
         )
     else:
         return pystray.Menu(
+            control_panel_item,
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Stopped", "중지됨"), None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(L("Start Bot", "봇 시작"), start_bot),

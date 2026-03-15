@@ -3,6 +3,41 @@ import ObjectiveC
 
 private var associatedFieldKey: UInt8 = 0
 
+private struct CodexRateLimitsResponse: Codable {
+    let rateLimits: CodexRateLimitSnapshot
+    let rateLimitsByLimitId: [String: CodexRateLimitSnapshot]?
+}
+
+private struct CodexRateLimitSnapshot: Codable {
+    let limitId: String?
+    let limitName: String?
+    let planType: String?
+    let primary: CodexRateLimitWindow?
+    let secondary: CodexRateLimitWindow?
+}
+
+private struct CodexRateLimitWindow: Codable {
+    let usedPercent: Int
+    let windowDurationMins: Int?
+    let resetsAt: Int?
+}
+
+private struct CodexUsageBucket: Codable {
+    let title: String?
+    let primary: CodexRateLimitWindow?
+    let secondary: CodexRateLimitWindow?
+}
+
+private struct CodexUsageData: Codable {
+    let planType: String?
+    let buckets: [CodexUsageBucket]
+}
+
+private struct CachedCodexUsage: Codable {
+    let fetchedAt: TimeInterval
+    let usage: CodexUsageData
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var contextMenu: NSMenu?
@@ -20,6 +55,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var controlPanel: NSWindow?
     private var cachedReleaseNotes: String = ""
     private var cachedNewVersion: String = ""
+    private var usageData: CodexUsageData?
+    private var usageLastFetched: Date?
 
     override init() {
         let scriptDir = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
@@ -77,7 +114,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         currentVersion = getVersion()
+        loadUsageCache()
         checkForUpdates()
+        fetchUsage()
         updateStatus()
         buildMenu()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -87,6 +126,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for updates every 5 hours
         Timer.scheduledTimer(withTimeInterval: 18000, repeats: true) { [weak self] _ in
             self?.checkForUpdates()
+        }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.fetchUsage()
         }
 
         // 첫 실행 시 컨트롤 패널 표시 (.env 미설정이면 설정 다이얼로그도 함께)
@@ -140,10 +182,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Release Notes
 
     private func fetchReleaseNotes() {
-        guard let url = URL(string: "https://api.github.com/repos/chadingTV/claudecode-discord/releases") else { return }
+        guard let url = URL(string: "https://api.github.com/repos/chadingTV/codex-discord/releases") else { return }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("claudecode-discord-tray", forHTTPHeaderField: "User-Agent")
+        request.setValue("codex-discord-tray", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 10
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -220,6 +262,217 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var usageCachePath: String {
+        "\(NSHomeDirectory())/.codex/rate-limits-cache.json"
+    }
+
+    private func fetchUsage(force: Bool = false, openPageOnFail: Bool = false) {
+        if !force, let lastFetch = usageLastFetched, Date().timeIntervalSince(lastFetch) < 30 {
+            return
+        }
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            guard let usage = self.readCodexUsage() else {
+                if openPageOnFail {
+                    DispatchQueue.main.async { self.openUsagePage() }
+                }
+                return
+            }
+
+            self.saveUsageCache(usage)
+
+            DispatchQueue.main.async {
+                self.usageData = usage
+                self.usageLastFetched = Date()
+                self.rebuildControlPanel()
+            }
+        }
+    }
+
+    private func readCodexUsage() -> CodexUsageData? {
+        guard let response = requestCodexRateLimits() else { return nil }
+        let primarySnapshot: CodexRateLimitSnapshot
+        if let snapshot = response.rateLimitsByLimitId?["codex"] {
+            primarySnapshot = snapshot
+        } else {
+            primarySnapshot = response.rateLimits
+        }
+
+        let bucket = CodexUsageBucket(
+            title: nil,
+            primary: primarySnapshot.primary,
+            secondary: primarySnapshot.secondary
+        )
+
+        return CodexUsageData(planType: primarySnapshot.planType, buckets: [bucket])
+    }
+
+    private func requestCodexRateLimits() -> CodexRateLimitsResponse? {
+        let task = Process()
+        task.launchPath = "/usr/bin/env"
+        task.arguments = ["codex", "app-server"]
+
+        var env = ProcessInfo.processInfo.environment
+        let extraPath = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        let currentPath = env["PATH"] ?? ""
+        env["PATH"] = ([currentPath] + extraPath).filter { !$0.isEmpty }.joined(separator: ":")
+        task.environment = env
+
+        let stdout = Pipe()
+        let stdin = Pipe()
+        task.standardOutput = stdout
+        task.standardError = Pipe()
+        task.standardInput = stdin
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        defer {
+            stdin.fileHandleForWriting.closeFile()
+            if task.isRunning {
+                task.terminate()
+            }
+        }
+
+        let writer = stdin.fileHandleForWriting
+        let reader = stdout.fileHandleForReading
+        var buffer = Data()
+
+        func sendRequest(id: Int, method: String, params: [String: Any]) -> Bool {
+            guard JSONSerialization.isValidJSONObject(params),
+                  let body = try? JSONSerialization.data(
+                    withJSONObject: ["jsonrpc": "2.0", "id": id, "method": method, "params": params]
+                  ) else {
+                return false
+            }
+            writer.write(body)
+            writer.write(Data([0x0A]))
+            return true
+        }
+
+        func nextMessage(until deadline: Date) -> [String: Any]? {
+            while Date() < deadline {
+                if let newline = buffer.firstIndex(of: 0x0A) {
+                    let line = buffer.prefix(upTo: newline)
+                    buffer.removeSubrange(...newline)
+                    guard !line.isEmpty else { continue }
+                    guard let json = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else {
+                        continue
+                    }
+                    return json
+                }
+
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    break
+                }
+                buffer.append(chunk)
+            }
+            return nil
+        }
+
+        func waitForResponse(id: Int, timeout: TimeInterval) -> [String: Any]? {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                guard let message = nextMessage(until: deadline) else { continue }
+                if let messageId = message["id"] as? Int, messageId == id {
+                    return message
+                }
+            }
+            return nil
+        }
+
+        guard sendRequest(id: 1, method: "initialize", params: [
+            "clientInfo": ["name": "codex-discord-menubar", "version": currentVersion],
+            "capabilities": ["experimentalApi": true],
+        ]) else {
+            return nil
+        }
+        guard waitForResponse(id: 1, timeout: 5) != nil else {
+            return nil
+        }
+
+        guard sendRequest(id: 2, method: "account/rateLimits/read", params: [:]) else {
+            return nil
+        }
+        guard let response = waitForResponse(id: 2, timeout: 5),
+              let result = response["result"],
+              let data = try? JSONSerialization.data(withJSONObject: result),
+              let decoded = try? JSONDecoder().decode(CodexRateLimitsResponse.self, from: data) else {
+            return nil
+        }
+
+        return decoded
+    }
+
+    private func saveUsageCache(_ usage: CodexUsageData) {
+        let cache = CachedCodexUsage(fetchedAt: Date().timeIntervalSince1970, usage: usage)
+        guard let data = try? JSONEncoder().encode(cache) else { return }
+        let url = URL(fileURLWithPath: usageCachePath)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url)
+    }
+
+    private func loadUsageCache() {
+        guard usageData == nil else { return }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: usageCachePath)),
+              let cache = try? JSONDecoder().decode(CachedCodexUsage.self, from: data) else {
+            return
+        }
+        usageData = cache.usage
+        usageLastFetched = Date(timeIntervalSince1970: cache.fetchedAt)
+    }
+
+    private func usageLabel(for window: CodexRateLimitWindow) -> String {
+        switch window.windowDurationMins {
+        case 300:
+            return L("5-hour limit", "5시간 한도")
+        case 10080:
+            return L("7-day limit", "7일 한도")
+        default:
+            if let mins = window.windowDurationMins {
+                return L("\(mins)-minute limit", "\(mins)분 한도")
+            }
+            return L("Usage limit", "사용량 한도")
+        }
+    }
+
+    private func usagePercentLeft(for window: CodexRateLimitWindow) -> Int {
+        max(0, min(100, 100 - window.usedPercent))
+    }
+
+    private func usageResetText(for window: CodexRateLimitWindow) -> String {
+        guard let ts = window.resetsAt else { return "" }
+        let date = Date(timeIntervalSince1970: TimeInterval(ts))
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: isKorean ? "ko_KR" : "en_US_POSIX")
+
+        if calendar.isDateInToday(date) {
+            formatter.dateFormat = isKorean ? "a h:mm" : "h:mm a"
+            let time = formatter.string(from: date)
+            return L("Resets \(time)", "\(time) 초기화")
+        }
+
+        formatter.dateFormat = isKorean ? "M월 d일" : "MMM d"
+        let day = formatter.string(from: date)
+        return L("Resets on \(day)", "\(day) 초기화")
+    }
+
+    private func usageBarColor(percentLeft: Int) -> NSColor {
+        if percentLeft <= 10 { return .systemRed }
+        if percentLeft <= 30 { return .systemOrange }
+        return .systemBlue
+    }
+
+    @objc private func fetchUsageClicked() {
+        fetchUsage(force: true, openPageOnFail: true)
+    }
+
     @objc private func checkUpdateClicked() {
         checkForUpdates()
         if !updateAvailable {
@@ -268,7 +521,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 runShell("launchctl unload '\(plistDst)' 2>/dev/null")
             }
 
-            let output = runShell("cd '\(botDir)' && git pull origin main --tags && npm install --production && npm run build 2>&1")
+            let hasLocalChanges = !runShell("cd '\(botDir)' && git status --porcelain 2>/dev/null")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+            if hasLocalChanges {
+                _ = runShell("cd '\(botDir)' && git stash push -u -m codex-discord-auto-update >/dev/null 2>&1")
+            }
+
+            let output = runShell("cd '\(botDir)' && git pull origin main --tags && npm install --production && npm rebuild better-sqlite3 && npm run build 2>&1")
+
+            if hasLocalChanges {
+                _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")
+            }
 
             currentVersion = getVersion()
             updateAvailable = false
@@ -488,6 +752,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         rebuildControlPanel()
 
+        if usageData == nil {
+            fetchUsage()
+        }
+
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -579,6 +847,139 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusContainer.addSubview(statusLabel)
 
         elements.append((statusContainer, 50))
+
+        if let usage = usageData, !usage.buckets.isEmpty {
+            let usageContainer = NSView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: 10))
+            usageContainer.wantsLayer = true
+            usageContainer.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.08).cgColor
+            usageContainer.layer?.cornerRadius = 10
+
+            var rows: [(bucketTitle: String?, label: String, percentLeft: Int, resetText: String)] = []
+            for bucket in usage.buckets {
+                if let primary = bucket.primary {
+                    rows.append((bucket.title, usageLabel(for: primary), usagePercentLeft(for: primary), usageResetText(for: primary)))
+                }
+                if let secondary = bucket.secondary {
+                    rows.append((nil, usageLabel(for: secondary), usagePercentLeft(for: secondary), usageResetText(for: secondary)))
+                }
+            }
+
+            let itemHeight: CGFloat = 44
+            let sectionHeaderHeight: CGFloat = 16
+            let padding: CGFloat = 12
+            let lastFetchedHeight: CGFloat = usageLastFetched == nil ? 0 : 16
+
+            var totalUsageHeight = padding * 2 + lastFetchedHeight
+            var previousBucketTitle: String? = nil
+            for row in rows {
+                if let bucketTitle = row.bucketTitle, bucketTitle != previousBucketTitle {
+                    totalUsageHeight += sectionHeaderHeight
+                    previousBucketTitle = bucketTitle
+                }
+                totalUsageHeight += itemHeight
+            }
+
+            var yOffset = totalUsageHeight - padding
+            previousBucketTitle = nil
+
+            if let planType = usage.planType {
+                let planLabel = NSTextField(labelWithString: planType.uppercased())
+                planLabel.frame = NSRect(x: contentWidth - 64, y: totalUsageHeight - 24, width: 50, height: 14)
+                planLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+                planLabel.textColor = .secondaryLabelColor
+                planLabel.alignment = .right
+                usageContainer.addSubview(planLabel)
+            }
+
+            for row in rows {
+                if let bucketTitle = row.bucketTitle, bucketTitle != previousBucketTitle {
+                    yOffset -= sectionHeaderHeight
+                    let bucketLabel = NSTextField(labelWithString: bucketTitle)
+                    bucketLabel.frame = NSRect(x: 14, y: yOffset + 2, width: contentWidth - 28, height: 14)
+                    bucketLabel.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+                    bucketLabel.textColor = .secondaryLabelColor
+                    usageContainer.addSubview(bucketLabel)
+                    previousBucketTitle = bucketTitle
+                }
+
+                yOffset -= itemHeight
+
+                let nameLabel = NSTextField(labelWithString: row.label)
+                nameLabel.frame = NSRect(x: 14, y: yOffset + 22, width: 180, height: 16)
+                nameLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+                nameLabel.textColor = .secondaryLabelColor
+                usageContainer.addSubview(nameLabel)
+
+                let pctLabel = NSTextField(labelWithString: L("\(row.percentLeft)% left", "\(row.percentLeft)% 남음"))
+                pctLabel.frame = NSRect(x: contentWidth - 150, y: yOffset + 22, width: 136, height: 16)
+                pctLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+                pctLabel.textColor = usageBarColor(percentLeft: row.percentLeft)
+                pctLabel.alignment = .right
+                usageContainer.addSubview(pctLabel)
+
+                let barWidth = contentWidth - 28
+                let barBg = NSView(frame: NSRect(x: 14, y: yOffset + 8, width: barWidth, height: 8))
+                barBg.wantsLayer = true
+                barBg.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.15).cgColor
+                barBg.layer?.cornerRadius = 4
+                usageContainer.addSubview(barBg)
+
+                let fillWidth = max(0, min(barWidth, barWidth * CGFloat(row.percentLeft) / 100.0))
+                let barFill = NSView(frame: NSRect(x: 14, y: yOffset + 8, width: fillWidth, height: 8))
+                barFill.wantsLayer = true
+                barFill.layer?.backgroundColor = usageBarColor(percentLeft: row.percentLeft).cgColor
+                barFill.layer?.cornerRadius = 4
+                usageContainer.addSubview(barFill)
+
+                if !row.resetText.isEmpty {
+                    let resetLabel = NSTextField(labelWithString: row.resetText)
+                    resetLabel.frame = NSRect(x: 14, y: yOffset - 8, width: barWidth, height: 12)
+                    resetLabel.font = NSFont.systemFont(ofSize: 9)
+                    resetLabel.textColor = .tertiaryLabelColor
+                    usageContainer.addSubview(resetLabel)
+                }
+            }
+
+            if let fetched = usageLastFetched {
+                let ago = Int(Date().timeIntervalSince(fetched))
+                let fetchedText: String
+                if ago < 60 {
+                    fetchedText = L("Updated just now", "방금 갱신됨")
+                } else if ago < 3600 {
+                    fetchedText = L("Updated \(ago / 60)m ago", "\(ago / 60)분 전 갱신")
+                } else {
+                    fetchedText = L("Updated \(ago / 3600)h ago", "\(ago / 3600)시간 전 갱신")
+                }
+
+                let fetchedLabel = NSTextField(labelWithString: fetchedText)
+                fetchedLabel.frame = NSRect(x: 14, y: 4, width: contentWidth - 28, height: 12)
+                fetchedLabel.font = NSFont.systemFont(ofSize: 9)
+                fetchedLabel.textColor = .tertiaryLabelColor
+                fetchedLabel.alignment = .right
+                usageContainer.addSubview(fetchedLabel)
+            }
+
+            usageContainer.frame = NSRect(x: 0, y: 0, width: contentWidth, height: totalUsageHeight)
+
+            let clickBtn = NSButton(frame: NSRect(x: 0, y: 0, width: contentWidth, height: totalUsageHeight))
+            clickBtn.title = ""
+            clickBtn.isBordered = false
+            clickBtn.isTransparent = true
+            clickBtn.target = self
+            clickBtn.action = #selector(openUsagePage)
+            usageContainer.addSubview(clickBtn)
+
+            elements.append((usageContainer, totalUsageHeight))
+        } else {
+            let fetchBtn = createStyledButton(
+                title: L("Load Usage Info", "사용량 정보 불러오기"), width: contentWidth,
+                bgColor: NSColor(white: 0.5, alpha: 0.08), fgColor: .secondaryLabelColor
+            )
+            fetchBtn.frame = NSRect(x: 0, y: 0, width: contentWidth, height: 30)
+            fetchBtn.target = self
+            fetchBtn.action = #selector(fetchUsageClicked)
+            elements.append((fetchBtn, 34))
+        }
 
         // Bot control buttons
         if hasEnv {
@@ -706,7 +1107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // GitHub link
         let ghButton = NSButton(frame: NSRect(x: 0, y: 0, width: contentWidth, height: 20))
-        ghButton.title = "GitHub: upstream repo"
+        ghButton.title = "GitHub: chadingTV/codex-discord"
         ghButton.bezelStyle = .inline
         ghButton.isBordered = false
         ghButton.font = NSFont.systemFont(ofSize: 11)
@@ -829,12 +1230,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         restartBot()
     }
 
+    @objc private func openUsagePage() {
+        NSWorkspace.shared.open(URL(string: "https://chatgpt.com/codex/settings/usage")!)
+    }
+
     @objc private func openGitHub() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/claudecode-discord")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/codex-discord")!)
     }
 
     @objc private func openGitHubIssues() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/claudecode-discord/issues")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/codex-discord/issues")!)
     }
 
     // MARK: - Settings Window
@@ -1069,7 +1474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSetupGuide() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/claudecode-discord/blob/main/SETUP.md")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/chadingTV/codex-discord/blob/main/SETUP.md")!)
     }
 
     @objc private func radioToggled(_ sender: NSButton) {

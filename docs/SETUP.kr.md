@@ -253,6 +253,7 @@ tail -f bot.log
 
 - `systemd --user` 서비스
 - 데스크톱 세션이 있으면 tray 앱 시작
+- tray 메뉴에서 상태, 사용량, 봇 제어용 별도 컨트롤 패널 열기 가능
 - GUI가 없어도 headless 모드로 실행 가능
 
 ### Windows

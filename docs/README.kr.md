@@ -233,6 +233,7 @@ Discord에 파일을 첨부하면:
 
 - `./linux-start.sh`: `systemd --user` 기반 실행
 - 데스크톱 세션이 있으면 tray 앱도 시작
+- tray 메뉴에서 상태, 사용량, 봇 제어가 보이는 별도 컨트롤 패널을 열 수 있음
 - `./linux-start.sh --fg`: foreground 디버깅 실행
 
 ### Windows

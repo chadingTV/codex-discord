@@ -249,6 +249,7 @@ Behavior:
 
 - `systemd --user` service for the bot
 - tray app if a desktop session is available
+- tray menu can open a separate control panel with status, usage, and bot actions
 - headless-friendly if no GUI is present
 
 ### Windows
