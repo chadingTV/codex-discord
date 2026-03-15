@@ -75,6 +75,19 @@ if "%~1"=="--fg" (
     if not exist "dist" (
         echo [codex-bot] 빌드 파일 없음, 빌드 중...
         call npm run build
+    ) else (
+        for /f %%t in ('powershell -NoProfile -Command "(Get-ChildItem src -Recurse -Filter *.ts | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime.Ticks"') do set "SRC_TIME=%%t"
+        for /f %%t in ('powershell -NoProfile -Command "(Get-Item dist\index.js).LastWriteTime.Ticks"') do set "DIST_TIME=%%t"
+        if !SRC_TIME! gtr !DIST_TIME! (
+            echo [codex-bot] 소스 변경 감지, 다시 빌드 중...
+            call npm run build
+        )
+    )
+
+    node -e "require('./node_modules/better-sqlite3/build/Release/better_sqlite3.node')" 2>nul
+    if errorlevel 1 (
+        echo [codex-bot] 네이티브 모듈 호환성 문제 감지, 재빌드 중...
+        call npm rebuild better-sqlite3
     )
 
     echo [codex-bot] 봇 시작 ^(포그라운드^)...
@@ -115,10 +128,29 @@ if not "!LOCAL!"=="!REMOTE!" (
 if not exist "dist" (
     echo [codex-bot] 빌드 파일 없음, 빌드 중...
     call npm run build
+ ) else (
+    for /f %%t in ('powershell -NoProfile -Command "(Get-ChildItem src -Recurse -Filter *.ts | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime.Ticks"') do set "SRC_TIME=%%t"
+    for /f %%t in ('powershell -NoProfile -Command "(Get-Item dist\index.js).LastWriteTime.Ticks"') do set "DIST_TIME=%%t"
+    if !SRC_TIME! gtr !DIST_TIME! (
+        echo [codex-bot] 소스 변경 감지, 다시 빌드 중...
+        call npm run build
+    )
 )
 
-:: 트레이 앱 컴파일 (exe 없으면)
+node -e "require('./node_modules/better-sqlite3/build/Release/better_sqlite3.node')" 2>nul
+if errorlevel 1 (
+    echo [codex-bot] 네이티브 모듈 호환성 문제 감지, 재빌드 중...
+    call npm rebuild better-sqlite3
+)
+
+:: 트레이 앱 컴파일 (exe 없거나 소스가 더 최신이면)
+set "NEED_TRAY_BUILD=0"
 if not exist "%TRAY_EXE%" (
+    set "NEED_TRAY_BUILD=1"
+) else (
+    for /f %%a in ('powershell -NoProfile -Command "if ((Get-Item \"%TRAY_SRC%\").LastWriteTime -gt (Get-Item \"%TRAY_EXE%\").LastWriteTime) { echo 1 } else { echo 0 }"') do set "NEED_TRAY_BUILD=%%a"
+)
+if "!NEED_TRAY_BUILD!"=="1" (
     if exist "%TRAY_SRC%" (
         echo 🔨 트레이 앱 빌드 중...
         :: .NET Framework csc.exe 찾기

@@ -89,6 +89,14 @@ if [ "$1" = "--fg" ]; then
     if [ ! -d "dist" ]; then
         echo "[codex-bot] No build files found, building..."
         npm run build
+    elif find src -name "*.ts" -newer dist/index.js 2>/dev/null | grep -q .; then
+        echo "[codex-bot] Source changed, rebuilding..."
+        npm run build
+    fi
+
+    if ! node -e "require('./node_modules/better-sqlite3/build/Release/better_sqlite3.node')" 2>/dev/null; then
+        echo "[codex-bot] Native modules incompatible, rebuilding..."
+        npm rebuild better-sqlite3
     fi
 
     echo "[codex-bot] Starting bot (foreground)..."
@@ -98,6 +106,11 @@ if [ "$1" = "--fg" ]; then
 fi
 
 # Default: background mode (register with launchd)
+
+if ! node -e "require('./node_modules/better-sqlite3/build/Release/better_sqlite3.node')" 2>/dev/null; then
+    echo "[codex-bot] Native modules incompatible, rebuilding..."
+    npm rebuild better-sqlite3
+fi
 
 # Stop existing bot if running
 if launchctl list | grep -q "$LABEL"; then

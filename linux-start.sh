@@ -69,6 +69,16 @@ if [ -z "$NODE_BIN" ]; then
     exit 1
 fi
 
+check_native_modules() {
+    local sqlite_node="$SCRIPT_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    if [ -f "$sqlite_node" ]; then
+        if ! "$NODE_BIN" -e "require('$sqlite_node')" 2>/dev/null; then
+            echo "🔧 Native modules incompatible with this machine, rebuilding..."
+            cd "$SCRIPT_DIR" && npm rebuild better-sqlite3 2>/dev/null
+        fi
+    fi
+}
+
 # --stop: 중지
 if [ "$1" = "--stop" ]; then
     systemctl --user stop "$SERVICE_NAME" 2>/dev/null
@@ -152,7 +162,12 @@ if [ "$1" = "--fg" ]; then
     if [ ! -d "dist" ]; then
         echo "[codex-bot] No build files found, building..."
         npm run build
+    elif find src -name "*.ts" -newer dist/index.js 2>/dev/null | grep -q .; then
+        echo "[codex-bot] Source changed, rebuilding..."
+        npm run build
     fi
+
+    check_native_modules
 
     echo "[codex-bot] Starting bot (foreground)..."
     touch "$SCRIPT_DIR/.bot.lock"
@@ -161,6 +176,8 @@ if [ "$1" = "--fg" ]; then
 fi
 
 # Default: background mode (register with systemd)
+
+check_native_modules
 
 # Create systemd user directory
 mkdir -p "$HOME/.config/systemd/user"

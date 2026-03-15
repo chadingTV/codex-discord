@@ -236,7 +236,7 @@ class CodexBotTray : Form
             string psScript =
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
                 "try { " +
-                "$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/chadingTV/claudecode-discord/releases' -TimeoutSec 10 -Headers @{'User-Agent'='claudecode-discord-tray'}; " +
+                "$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/chadingTV/codex-discord/releases' -TimeoutSec 10 -Headers @{'User-Agent'='codex-discord-tray'}; " +
                 "$cv = '" + currentTag.Replace("'", "''") + "'.TrimStart('v').Split('.'); " +
                 "$notes = @(); $latest = '" + currentTag.Replace("'", "''") + "'; " +
                 "foreach($rel in $r) { " +
@@ -374,10 +374,19 @@ class CodexBotTray : Form
             Thread.Sleep(2000);
         }
 
-        // git pull
+        bool hasLocalChanges = !string.IsNullOrWhiteSpace(
+            RunCmdOutput("git", "-C \"" + botDir + "\" status --porcelain"));
+        if (hasLocalChanges)
+        {
+            RunCmdOutput("git", "-C \"" + botDir + "\" stash push -u -m \"codex-discord-auto-update\"");
+        }
+
         RunCmdOutput("git", "-C \"" + botDir + "\" pull origin main --tags");
-        // npm install & build
-        RunCmd("cd /d \"" + botDir + "\" && npm install && npm run build", true);
+        if (hasLocalChanges)
+        {
+            RunCmdOutput("git", "-C \"" + botDir + "\" stash pop");
+        }
+        RunCmd("cd /d \"" + botDir + "\" && npm install && npm rebuild better-sqlite3 && npm run build", true);
 
         currentVersion = GetVersion();
         updateAvailable = false;
@@ -390,42 +399,46 @@ class CodexBotTray : Form
 
         if (File.Exists(traySrc))
         {
-            // CSC 경로 찾기용 bat 스크립트 생성
+            string updateLog = Path.Combine(botDir, "update.log");
             string batContent =
                 "@echo off\r\n" +
-                "chcp 65001 >nul 2>&1\r\n" +
                 "setlocal enabledelayedexpansion\r\n" +
+                "set \"LOG=" + updateLog + "\"\r\n" +
+                "echo [%date% %time%] Update started > \"%LOG%\"\r\n" +
                 ":: Kill all tray processes and wait\r\n" +
                 "taskkill /f /im CodexBotTray.exe >nul 2>&1\r\n" +
                 "timeout /t 3 /nobreak >nul\r\n" +
                 ":: Delete old exe\r\n" +
                 "del \"" + trayExe + "\" >nul 2>&1\r\n" +
-                ":: Find csc.exe\r\n" +
                 "set \"CSC=\"\r\n" +
                 "for /f \"delims=\" %%i in ('dir /b /s \"%WINDIR%\\Microsoft.NET\\Framework64\\csc.exe\" 2^>nul') do set \"CSC=%%i\"\r\n" +
                 "if \"!CSC!\"==\"\" (\r\n" +
                 "    for /f \"delims=\" %%i in ('dir /b /s \"%WINDIR%\\Microsoft.NET\\Framework\\csc.exe\" 2^>nul') do set \"CSC=%%i\"\r\n" +
                 ")\r\n" +
-                ":: Compile new tray exe\r\n" +
-                "if not \"!CSC!\"==\"\" (\r\n" +
-                "    \"!CSC!\" /nologo /target:winexe /out:\"" + trayExe + "\" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll \"" + traySrc + "\"\r\n" +
+                "if \"!CSC!\"==\"\" (\r\n" +
+                "    echo [%date% %time%] ERROR: csc.exe not found >> \"%LOG%\"\r\n" +
+                "    goto :done\r\n" +
                 ")\r\n" +
-                ":: Restart tray with --show\r\n" +
+                "echo [%date% %time%] Compiling with !CSC! >> \"%LOG%\"\r\n" +
+                "\"!CSC!\" /nologo /target:winexe /out:\"" + trayExe + "\" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll \"" + traySrc + "\" >> \"%LOG%\" 2>&1\r\n" +
                 "if exist \"" + trayExe + "\" (\r\n" +
+                "    echo [%date% %time%] Compile OK, restarting >> \"%LOG%\"\r\n" +
                 "    start \"\" \"" + trayExe + "\" --show\r\n" +
+                ") else (\r\n" +
+                "    echo [%date% %time%] ERROR: Compile failed >> \"%LOG%\"\r\n" +
                 ")\r\n" +
-                ":: Bot will be auto-started by tray app on launch\r\n";
-
-            batContent += "del \"" + updateBat + "\" >nul 2>&1\r\n";
+                ":done\r\n" +
+                "del \"" + updateBat + "\" >nul 2>&1\r\n";
 
             File.WriteAllText(updateBat, batContent);
 
-            // VBS로 bat을 숨겨서 실행
-            string vbs = Path.Combine(botDir, ".tray-update.vbs");
-            File.WriteAllText(vbs,
-                "Set ws = CreateObject(\"WScript.Shell\")\n" +
-                "ws.Run \"cmd /c \"\"" + updateBat + "\"\"\", 0, False\n");
-            Process.Start("wscript", "\"" + vbs + "\"");
+            var psi = new ProcessStartInfo("cmd.exe", "/c \"" + updateBat + "\"")
+            {
+                WindowStyle = ProcessWindowStyle.Hidden,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+            };
+            Process.Start(psi);
 
             // 자기 자신 종료 (bat이 대기 후 처리)
             trayIcon.Visible = false;
@@ -812,12 +825,12 @@ class CodexBotTray : Form
 
         // Setup guide link
         var linkLabel = new LinkLabel() { Text = L("Open Setup Guide", "설정 가이드 열기"), Left = 15, Top = 10, Width = 450, Height = 20, LinkColor = LinkBlue, BackColor = Color.Transparent };
-        linkLabel.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/claudecode-discord/blob/main/SETUP.md"); };
+        linkLabel.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/codex-discord/blob/main/SETUP.md"); };
         form.Controls.Add(linkLabel);
 
         // Issues link
         var issueLabel = new LinkLabel() { Text = L("Bug Report / Feature Request (GitHub Issues)", "버그 신고 / 기능 요청 (GitHub Issues)"), Left = 15, Top = 32, Width = 450, Height = 20, LinkColor = LinkBlue, BackColor = Color.Transparent };
-        issueLabel.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/claudecode-discord/issues"); };
+        issueLabel.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/codex-discord/issues"); };
         form.Controls.Add(issueLabel);
 
         string[][] fields = new string[][] {
@@ -1362,7 +1375,7 @@ class CodexBotTray : Form
             Font = new Font(FontFamily.GenericSansSerif, 8.5f),
             LinkColor = LinkBlue, BackColor = Color.Transparent
         };
-        ghLink.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/claudecode-discord"); };
+        ghLink.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/codex-discord"); };
         controlPanel.Controls.Add(ghLink);
         y += 22;
 
@@ -1375,7 +1388,7 @@ class CodexBotTray : Form
             Font = new Font(FontFamily.GenericSansSerif, 8.5f),
             LinkColor = LinkBlue, BackColor = Color.Transparent
         };
-        issueLink.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/claudecode-discord/issues"); };
+        issueLink.LinkClicked += (s, ev) => { Process.Start("https://github.com/chadingTV/codex-discord/issues"); };
         controlPanel.Controls.Add(issueLink);
         y += 22;
 
