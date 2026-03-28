@@ -155,6 +155,30 @@ Before the first real run, make sure you have done all of these:
 
 The full illustrated walkthrough is in [SETUP.md](SETUP.md).
 
+## Visual Setup
+
+Discord OAuth scopes and bot permissions:
+
+<p align="center">
+  <img src="docs/discord-scopes.png" alt="Discord OAuth scopes" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/discord-bot-permissions.png" alt="Discord bot permissions" width="420">
+</p>
+
+How to copy the required Discord IDs:
+
+<p align="center">
+  <img src="docs/copy-server-id-en.png" alt="Copy Discord server ID" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/copy-user-id-en.png" alt="Copy Discord user ID" width="420">
+</p>
+
+For the full step-by-step setup with explanations, see [SETUP.md](SETUP.md).
+
 ## Commands
 
 | Command | What it does |
