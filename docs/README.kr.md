@@ -155,29 +155,15 @@ win-start.bat
 
 이미지 포함 전체 절차는 [SETUP.kr.md](SETUP.kr.md)에 정리돼 있습니다.
 
-## 빠른 스크린샷
+## 패널 미리보기
 
-Discord OAuth scope와 bot 권한 설정:
-
-<p align="center">
-  <img src="discord-scopes.png" alt="Discord OAuth2 scopes" width="420">
-</p>
+Discord 안에서 보이는 제어 패널과 세션 흐름은 이런 느낌입니다:
 
 <p align="center">
-  <img src="discord-bot-permissions.png" alt="Discord bot permissions" width="420">
+  <img src="panel-kr.png" alt="Codex Discord 패널 미리보기" width="900">
 </p>
 
-필수 Discord ID 복사 위치:
-
-<p align="center">
-  <img src="copy-server-id-kr.png" alt="Discord 서버 ID 복사" width="420">
-</p>
-
-<p align="center">
-  <img src="copy-user-id-kr.png" alt="Discord 사용자 ID 복사" width="420">
-</p>
-
-설명까지 포함한 전체 설치 흐름은 [SETUP.kr.md](SETUP.kr.md)를 보면 됩니다.
+설치 스크린샷과 전체 설정 절차는 [SETUP.kr.md](SETUP.kr.md)를 보면 됩니다.
 
 ## 명령어
 
