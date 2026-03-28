@@ -21,8 +21,9 @@ import * as sessionsCmd from "./commands/sessions.js";
 import * as clearSessionsCmd from "./commands/clear-sessions.js";
 import * as lastCmd from "./commands/last.js";
 import * as queueCmd from "./commands/queue.js";
+import * as usageCmd from "./commands/usage.js";
 
-const commands = [registerCmd, unregisterCmd, statusCmd, stopCmd, autoApproveCmd, sessionsCmd, clearSessionsCmd, lastCmd, queueCmd];
+const commands = [registerCmd, unregisterCmd, statusCmd, stopCmd, autoApproveCmd, sessionsCmd, clearSessionsCmd, lastCmd, queueCmd, usageCmd];
 const commandMap = new Collection<
   string,
   { execute: (interaction: ChatInputCommandInteraction) => Promise<void> }

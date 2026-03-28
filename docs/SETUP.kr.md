@@ -36,6 +36,7 @@ codex login
 ```
 
 이 프로젝트는 로컬 Codex 로그인 세션을 사용합니다. OpenAI API 키를 `.env`에 직접 넣을 필요는 없습니다.
+예전에 다른 프로젝트에서 API 키 기반 흐름을 썼더라도, 여기서는 특별히 `codex login --with-api-key`를 의도하지 않는 한 그 방식이 필요하지 않습니다.
 
 ## 2. 프로젝트 설치
 
@@ -188,6 +189,8 @@ SHOW_COST=false
 | `RATE_LIMIT_PER_MINUTE` | 사용자별 분당 요청 제한 |
 | `SHOW_COST` | 결과 footer 제어용 옵션. 현재 Codex 로그인 기반 실행에서 실제 비용을 계산하진 않음 |
 
+이 프로젝트의 일반적인 설정에는 `OPENAI_API_KEY` 변수가 필요하지 않습니다.
+
 ### `BASE_PROJECT_DIR` 고르기
 
 원격 제어할 프로젝트들이 들어 있는 상위 폴더를 지정하면 됩니다.
@@ -199,6 +202,7 @@ SHOW_COST=false
 - Windows: `C:\Users\you\projects`
 
 이후 `/register api-server`를 입력하면 이 base directory 아래로 해석됩니다.
+`/register apps/api-server` 같은 중첩 경로도 autocomplete로 선택할 수 있습니다.
 
 간단한 예:
 
@@ -287,6 +291,7 @@ type bot.log
 ```
 
 3. `BASE_PROJECT_DIR` 아래 폴더를 선택합니다.
+   `apps/api-server` 같은 중첩 경로도 선택할 수 있습니다.
 4. 일반 메시지로 예를 들어:
 
 ```text
@@ -300,6 +305,7 @@ analyze this project
 - `/status`
 - `/sessions`
 - `/last`
+- `/usage`
 
 ## 8. 세션 목록은 어떻게 보나
 
@@ -364,6 +370,7 @@ turn 실행 중에는:
 - `codex login status`
 - bot이 같은 머신과 같은 계정 환경에서 돌고 있는지
 - background launcher가 `node`를 제대로 찾는지
+- `.env` API 키 방식으로 동작할 거라고 기대하고 있지 않은지
 
 빠르게 확인하려면 foreground 모드가 제일 낫습니다.
 

@@ -10,6 +10,7 @@ import { registerProject, getProject } from "../../db/database.js";
 import { validateProjectPath } from "../../security/guard.js";
 import { getConfig } from "../../utils/config.js";
 import { L } from "../../utils/i18n.js";
+import { listProjectAutocompleteChoices } from "./register-paths.js";
 
 export const data = new SlashCommandBuilder()
   .setName("register")
@@ -88,29 +89,9 @@ export async function autocomplete(
 ): Promise<void> {
   const focused = interaction.options.getFocused();
   const config = getConfig();
-  const baseDir = config.BASE_PROJECT_DIR;
 
   try {
-    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
-    const dirs = entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-      .map((e) => e.name)
-      .filter((name) => name.toLowerCase().includes(focused.toLowerCase()))
-      .slice(0, 24); // Discord max 25, reserve 1 for base dir
-
-    const choices: { name: string; value: string }[] = [];
-    // Add base directory itself as first option
-    if (!focused || ".".includes(focused.toLowerCase()) || baseDir.toLowerCase().includes(focused.toLowerCase())) {
-      choices.push({ name: `. (${baseDir})`, value: baseDir });
-    }
-    choices.push(...dirs.map((name) => ({ name, value: name })));
-
-    // If user typed something that doesn't exactly match any existing dir, offer to create it
-    if (focused && !dirs.some((d) => d.toLowerCase() === focused.toLowerCase())) {
-      choices.push({ name: `📁 Create new: ${focused}`, value: focused });
-    }
-
-    await interaction.respond(choices.slice(0, 25));
+    await interaction.respond(listProjectAutocompleteChoices(config.BASE_PROJECT_DIR, focused));
   } catch {
     await interaction.respond([]);
   }

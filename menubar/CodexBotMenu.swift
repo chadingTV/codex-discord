@@ -528,7 +528,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = runShell("cd '\(botDir)' && git stash push -u -m codex-discord-auto-update >/dev/null 2>&1")
             }
 
-            let output = runShell("cd '\(botDir)' && git pull origin main --tags && npm install --production && npm rebuild better-sqlite3 && npm run build 2>&1")
+            let output = runShell("cd '\(botDir)' && git pull origin main --tags && npm install && npm rebuild better-sqlite3 && npm run build 2>&1")
 
             if hasLocalChanges {
                 _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")

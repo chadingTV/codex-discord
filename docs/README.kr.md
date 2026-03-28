@@ -44,6 +44,7 @@ Discord를 Codex 제어 UI로 사용합니다.
 - 버튼 또는 `/stop`으로 실행 중 turn 중단
 - 작업 중 추가 프롬프트 큐잉
 - 이미지/파일 첨부 지원
+- `/usage`로 Discord 안에서 Codex 사용량 확인
 - SQLite 기반 프로젝트/세션 매핑
 - 허용 사용자 화이트리스트, rate limit, 경로 검증
 - macOS / Linux / Windows용 백그라운드 실행 스크립트 제공
@@ -125,6 +126,8 @@ RATE_LIMIT_PER_MINUTE=10
 SHOW_COST=false
 ```
 
+일반적인 사용에서는 `.env`에 `OPENAI_API_KEY`를 넣지 않습니다. 이 프로젝트는 로컬 `codex login` 세션을 그대로 사용합니다.
+
 4. 봇을 시작합니다.
 
 ```bash
@@ -163,6 +166,7 @@ win-start.bat
 | `/auto-approve on\|off` | 현재 채널 승인 우회 여부 설정 |
 | `/sessions` | 프로젝트의 기존 로컬 Codex 세션 목록 및 재개 |
 | `/last` | 현재 세션의 마지막 assistant 응답 조회 |
+| `/usage` | 로컬 계정 기준 Codex 사용량 확인 |
 | `/queue list` | 현재 채널 큐 확인 |
 | `/queue clear` | 큐 비우기 |
 | `/clear-sessions` | 현재 프로젝트의 저장된 세션 매핑 제거 |
@@ -173,7 +177,7 @@ win-start.bat
 2. `BASE_PROJECT_DIR` 아래 프로젝트 폴더 선택 또는 입력
 3. `fix the failing tests` 같은 일반 메시지 전송
 4. Codex가 명령 실행이나 파일 수정을 원하면 Discord에서 승인 또는 거부
-5. 나중에 `/sessions`로 이전 스레드에 다시 붙기
+5. 필요할 때 `/sessions`, `/last`, `/usage`로 현재 상태를 다시 확인하기
 
 ## 프로젝트 경로 정책
 
@@ -181,6 +185,7 @@ win-start.bat
 
 - `BASE_PROJECT_DIR`가 사용 가능한 프로젝트 루트입니다
 - `/register my-app`은 `BASE_PROJECT_DIR/my-app`으로 해석됩니다
+- `/register apps/api-server` 같은 중첩 경로도 autocomplete로 선택할 수 있습니다
 - 절대 경로도 허용되지만 최종 경로가 `BASE_PROJECT_DIR` 내부여야 합니다
 - 폴더가 아직 없으면 `/register`가 새로 만들 수 있습니다
 

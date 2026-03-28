@@ -36,6 +36,7 @@ codex login
 ```
 
 This project uses your local Codex login session. You do not need to paste an OpenAI API key into `.env`.
+If you previously used an API-key-based workflow elsewhere, leave that out here unless you intentionally want `codex login --with-api-key`.
 
 ## 2. Install the Project
 
@@ -184,6 +185,8 @@ SHOW_COST=false
 | `RATE_LIMIT_PER_MINUTE` | Per-user Discord prompt limit |
 | `SHOW_COST` | Controls the result footer; Codex login-based runs do not currently report real turn cost here |
 
+There is no required `OPENAI_API_KEY` variable for this project's normal setup.
+
 ### Choosing `BASE_PROJECT_DIR`
 
 Pick a parent folder that contains the projects you want to control.
@@ -195,6 +198,7 @@ Examples:
 - Windows: `C:\Users\you\projects`
 
 When you later run `/register api-server`, the bot resolves it under that base directory.
+Nested paths are supported too, so `/register apps/api-server` can be selected from autocomplete as well.
 
 Quick example:
 
@@ -283,6 +287,7 @@ Behavior:
 ```
 
 3. Choose a folder under `BASE_PROJECT_DIR`.
+   You can pick a nested path like `apps/api-server` as well.
 4. Send a normal message like:
 
 ```text
@@ -296,6 +301,7 @@ Recommended follow-up checks:
 - `/status`
 - `/sessions`
 - `/last`
+- `/usage`
 
 ## 8. How Session Discovery Works
 
@@ -360,6 +366,7 @@ Check:
 - `codex login status`
 - the bot is running on the same machine and account that has the Codex login
 - the background launcher can find `node`
+- you did not set up the project expecting an `.env` API key flow
 
 Foreground mode is the fastest way to debug:
 

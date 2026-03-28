@@ -30,6 +30,25 @@ export interface CodexThreadSummary {
   turns: CodexTurn[];
 }
 
+export interface CodexRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins?: number;
+  resetsAt?: number;
+}
+
+export interface CodexRateLimitSnapshot {
+  limitId?: string;
+  limitName?: string;
+  planType?: string;
+  primary?: CodexRateLimitWindow;
+  secondary?: CodexRateLimitWindow;
+}
+
+export interface CodexRateLimitsResponse {
+  rateLimits: CodexRateLimitSnapshot;
+  rateLimitsByLimitId?: Record<string, CodexRateLimitSnapshot>;
+}
+
 interface JsonRpcNotification {
   method: string;
   params?: Record<string, unknown>;
@@ -228,6 +247,10 @@ export class CodexAppServerClient extends EventEmitter {
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     await this.request("turn/interrupt", { threadId, turnId });
+  }
+
+  async readRateLimits(): Promise<CodexRateLimitsResponse> {
+    return this.request<CodexRateLimitsResponse>("account/rateLimits/read", {});
   }
 }
 

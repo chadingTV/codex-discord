@@ -44,6 +44,7 @@ Because it reads local Codex thread storage under `~/.codex`, threads created in
 - Stop active turns from a button or `/stop`
 - Queue follow-up prompts while a task is already running
 - Attachment support for images and files
+- Codex usage snapshot from Discord with `/usage`
 - SQLite-backed project/session mapping
 - Allowed-user whitelist, rate limiting, and path validation
 - Background launchers for macOS, Linux, and Windows
@@ -125,6 +126,8 @@ RATE_LIMIT_PER_MINUTE=10
 SHOW_COST=false
 ```
 
+Do not add `OPENAI_API_KEY` to `.env` for normal use. This project uses your local `codex login` session instead.
+
 4. Start the bot.
 
 ```bash
@@ -163,6 +166,7 @@ The full illustrated walkthrough is in [SETUP.md](SETUP.md).
 | `/auto-approve on\|off` | Toggle approval bypass for the current channel |
 | `/sessions` | List and resume existing local Codex sessions for the project |
 | `/last` | Show the last assistant response from the current session |
+| `/usage` | Show Codex rate-limit usage from your local account |
 | `/queue list` | Show queued prompts for this channel |
 | `/queue clear` | Clear queued prompts |
 | `/clear-sessions` | Remove stored session mappings for the current project |
@@ -173,7 +177,7 @@ The full illustrated walkthrough is in [SETUP.md](SETUP.md).
 2. Pick or type a project folder under `BASE_PROJECT_DIR`.
 3. Send a normal message like `fix the failing tests`.
 4. If Codex wants to run a command or edit files, approve or deny in Discord.
-5. Use `/sessions` later to jump back into a previous thread.
+5. Use `/sessions`, `/last`, or `/usage` later to inspect the current project state.
 
 ## Project Path Model
 
@@ -181,6 +185,7 @@ The bot enforces a base directory boundary:
 
 - `BASE_PROJECT_DIR` is the root users are allowed to register under
 - `/register my-app` becomes `BASE_PROJECT_DIR/my-app`
+- nested paths like `/register apps/api-server` are also supported in autocomplete
 - absolute paths are allowed only if they still resolve inside `BASE_PROJECT_DIR`
 - if the folder does not exist yet, `/register` can create it
 
