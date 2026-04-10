@@ -57,6 +57,7 @@ cached_new_version = ""
 usage_data = None
 usage_last_fetched = None
 last_usage_attempt = 0.0
+last_usage_error = ""
 control_panel = None
 
 
@@ -278,7 +279,41 @@ def _read_json_line(proc: subprocess.Popen, timeout: float) -> dict | None:
     return None
 
 
+def _read_json_response(proc: subprocess.Popen, expected_id: int, timeout: float) -> dict | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        payload = _read_json_line(proc, min(0.5, max(0.05, deadline - time.time())))
+        if isinstance(payload, dict) and payload.get("id") == expected_id:
+            return payload
+    return None
+
+
+def _read_optional_number(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _read_window(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    used_percent = _read_optional_number(value.get("usedPercent"))
+    if used_percent is None:
+        return None
+    window = {"usedPercent": used_percent}
+    duration = _read_optional_number(value.get("windowDurationMins"))
+    resets_at = _read_optional_number(value.get("resetsAt"))
+    if duration is not None:
+        window["windowDurationMins"] = duration
+    if resets_at is not None:
+        window["resetsAt"] = resets_at
+    return window
+
+
 def request_codex_usage() -> dict | None:
+    global last_usage_error
     command = """
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
@@ -303,8 +338,9 @@ codex app-server
                 "capabilities": {"experimentalApi": True},
             },
         })
-        init_response = _read_json_line(proc, 5)
+        init_response = _read_json_response(proc, 1, 5)
         if not init_response or init_response.get("id") != 1:
+            last_usage_error = L("Codex app-server did not respond to initialize.", "Codex app-server 초기화 응답이 없습니다.")
             return None
 
         _send_json_line(proc, {
@@ -313,9 +349,19 @@ codex app-server
             "method": "account/rateLimits/read",
             "params": {},
         })
-        response = _read_json_line(proc, 5)
+        response = _read_json_response(proc, 2, 5)
         if not response or response.get("id") != 2:
+            last_usage_error = L("Codex usage request timed out.", "Codex 사용량 요청이 시간 초과되었습니다.")
             return None
+        error = response.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                last_usage_error = message.strip()
+            else:
+                last_usage_error = L("Failed to load Codex usage.", "Codex 사용량을 불러오지 못했습니다.")
+            return None
+        last_usage_error = ""
         result = response.get("result") or {}
         return normalize_usage(result)
     finally:
@@ -330,23 +376,52 @@ codex app-server
 
 
 def normalize_usage(result: dict) -> dict | None:
+    buckets = []
+    for bucket in result.get("buckets") or []:
+        if not isinstance(bucket, dict):
+            continue
+        primary = _read_window(bucket.get("primary"))
+        secondary = _read_window(bucket.get("secondary"))
+        if not primary and not secondary:
+            continue
+        buckets.append({
+            "title": bucket.get("title") if isinstance(bucket.get("title"), str) else None,
+            "primary": primary,
+            "secondary": secondary,
+        })
+
+    if buckets:
+        usage = {"buckets": buckets}
+        plan_type = result.get("planType")
+        if isinstance(plan_type, str) and plan_type.strip():
+            usage["planType"] = plan_type
+        return usage
+
     snapshots = result.get("rateLimitsByLimitId") or {}
     primary_snapshot = snapshots.get("codex") or result.get("rateLimits") or {}
     if not primary_snapshot:
         return None
 
-    return {
-        "planType": primary_snapshot.get("planType"),
+    primary = _read_window(primary_snapshot.get("primary"))
+    secondary = _read_window(primary_snapshot.get("secondary"))
+    if not primary and not secondary:
+        return None
+
+    usage = {
         "buckets": [{
             "title": None,
-            "primary": primary_snapshot.get("primary"),
-            "secondary": primary_snapshot.get("secondary"),
+            "primary": primary,
+            "secondary": secondary,
         }],
     }
+    plan_type = primary_snapshot.get("planType")
+    if isinstance(plan_type, str) and plan_type.strip():
+        usage["planType"] = plan_type
+    return usage
 
 
 def fetch_usage(force: bool = False) -> bool:
-    global usage_data, usage_last_fetched, last_usage_attempt
+    global usage_data, usage_last_fetched, last_usage_attempt, last_usage_error
     now = time.time()
     if not force and now - last_usage_attempt < 60:
         return False
@@ -356,6 +431,7 @@ def fetch_usage(force: bool = False) -> bool:
         return False
     usage_data = usage
     usage_last_fetched = time.time()
+    last_usage_error = ""
     save_usage_cache(usage)
     return True
 
@@ -543,6 +619,34 @@ class ControlPanel:
             fetched = fetched_label()
             if fetched:
                 tk.Label(usage_panel, text=fetched, font=("Helvetica", 9), bg=BG_PANEL, fg=FG_DIM).pack(anchor="e", padx=14, pady=(8, 10))
+        elif last_usage_error:
+            error_panel = self.round_panel(self.container)
+            error_panel.pack(fill="x", pady=(0, ypad))
+            tk.Label(
+                error_panel,
+                text=L("Usage info unavailable", "사용량 정보를 불러오지 못했습니다."),
+                font=("Helvetica", 11, "bold"),
+                bg=BG_PANEL,
+                fg=FG_MUTED,
+            ).pack(anchor="w", padx=14, pady=(12, 0))
+            tk.Label(
+                error_panel,
+                text=last_usage_error[:180],
+                justify="left",
+                wraplength=400,
+                font=("Helvetica", 9),
+                bg=BG_PANEL,
+                fg=FG_DIM,
+            ).pack(anchor="w", padx=14, pady=(4, 12))
+
+            usage_button = self.make_button(
+                self.container,
+                L("Load Usage Info", "사용량 정보 불러오기"),
+                BUTTON_SECONDARY,
+                BUTTON_SECONDARY_ACTIVE,
+                lambda: self.manual_usage_refresh(),
+            )
+            usage_button.pack(fill="x", pady=(0, ypad))
         else:
             usage_button = self.make_button(
                 self.container,
