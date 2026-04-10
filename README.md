@@ -45,6 +45,7 @@ Because it reads local Codex thread storage under `~/.codex`, threads created in
 - Queue follow-up prompts while a task is already running
 - Attachment support for images and files
 - Codex usage snapshot from Discord with `/usage`
+- Desktop control panels on Linux and Windows can also show the same cached Codex usage snapshot
 - SQLite-backed project/session mapping
 - Allowed-user whitelist, rate limiting, and path validation
 - Background launchers for macOS, Linux, and Windows
@@ -108,6 +109,11 @@ If you prefer manual setup or want the full Discord bot creation walkthrough, fo
 codex login
 codex login status
 ```
+
+Windows PowerShell note:
+
+- if `codex login status` fails because PowerShell resolves `codex` to `codex.ps1`, run `codex.cmd login status` instead
+- the Windows bot and tray auto-detect a working Codex command (`codex.cmd`, `codex.exe`, or `codex`) and cache it in `~/.codex/codex-discord-runtime.json`
 
 2. Create `.env` from `.env.example`.
 
@@ -256,6 +262,8 @@ Practical note:
 - `win-start.bat` starts the bot and tray app
 - `win-start.bat --fg` runs foreground mode
 - `win-start.bat --stop` stops the bot
+- the tray panel can show status, controls, and cached Codex usage
+- the Windows launcher reuses the detected Codex command on future runs
 
 ## Development
 

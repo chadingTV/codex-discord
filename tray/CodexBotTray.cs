@@ -1,11 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
-using System.Windows.Forms;
-using System.Threading;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
 
 class CodexBotTray : Form
 {
@@ -27,11 +29,16 @@ class CodexBotTray : Form
     private bool updateAvailable = false;
     private string cachedReleaseNotes = "";
     private string cachedNewVersion = "";
+    private string resolvedCodexCommand = null;
+    private Dictionary<string, object> usageData = null;
+    private DateTime? usageLastFetched = null;
+    private DateTime lastUsageAttempt = DateTime.MinValue;
     private bool lastPanelRunning = false;
     private bool botStarting = false;
     private Color lastIconColor = Color.Empty;
     private IntPtr lastHIcon = IntPtr.Zero;
     private string lastStatusText = "";
+    private const string UsageUrl = "https://chatgpt.com/codex/settings/usage";
 
     // Language support
     private string langPrefFile;
@@ -60,6 +67,7 @@ class CodexBotTray : Form
         this.Opacity = 0;
 
         currentVersion = GetVersion();
+        LoadUsageCache();
 
         trayIcon = new NotifyIcon();
         trayIcon.Visible = true;
@@ -224,6 +232,451 @@ class CodexBotTray : Form
             if (av < bv) return false;
         }
         return false;
+    }
+
+    private string UsageCachePath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "rate-limits-cache.json");
+    }
+
+    private string RuntimeCachePath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "codex-discord-runtime.json");
+    }
+
+    private string ResolveCodexCommand()
+    {
+        if (!string.IsNullOrWhiteSpace(resolvedCodexCommand) && CommandWorks(resolvedCodexCommand))
+            return resolvedCodexCommand;
+
+        try
+        {
+            string runtimeCache = RuntimeCachePath();
+            if (File.Exists(runtimeCache))
+            {
+                var serializer = new JavaScriptSerializer();
+                var payload = serializer.DeserializeObject(File.ReadAllText(runtimeCache)) as Dictionary<string, object>;
+                if (payload != null && payload.ContainsKey("codexCommand"))
+                {
+                    string cachedCommand = payload["codexCommand"] as string;
+                    if (!string.IsNullOrWhiteSpace(cachedCommand) && CommandWorks(cachedCommand))
+                    {
+                        resolvedCodexCommand = cachedCommand;
+                        return resolvedCodexCommand;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        string[] candidates = new string[] { "codex.cmd", "codex.exe", "codex" };
+        foreach (string candidate in candidates)
+        {
+            if (!CommandWorks(candidate)) continue;
+            resolvedCodexCommand = candidate;
+            SaveRuntimeCache(candidate);
+            return resolvedCodexCommand;
+        }
+
+        resolvedCodexCommand = "codex.cmd";
+        return resolvedCodexCommand;
+    }
+
+    private bool CommandWorks(string command)
+    {
+        try
+        {
+            var proc = new Process();
+            proc.StartInfo.FileName = command;
+            proc.StartInfo.Arguments = "--version";
+            proc.StartInfo.UseShellExecute = false;
+            proc.StartInfo.RedirectStandardOutput = true;
+            proc.StartInfo.RedirectStandardError = true;
+            proc.StartInfo.CreateNoWindow = true;
+            proc.StartInfo.WorkingDirectory = botDir;
+            proc.Start();
+            if (!proc.WaitForExit(10000))
+            {
+                try { proc.Kill(); } catch { }
+                return false;
+            }
+            return proc.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void SaveRuntimeCache(string codexCommand)
+    {
+        try
+        {
+            string runtimeCache = RuntimeCachePath();
+            Directory.CreateDirectory(Path.GetDirectoryName(runtimeCache));
+            var serializer = new JavaScriptSerializer();
+            var payload = new Dictionary<string, object>();
+            payload["codexCommand"] = codexCommand;
+            File.WriteAllText(runtimeCache, serializer.Serialize(payload));
+        }
+        catch { }
+    }
+
+    private void LoadUsageCache()
+    {
+        if (usageData != null) return;
+
+        try
+        {
+            string path = UsageCachePath();
+            if (!File.Exists(path)) return;
+
+            var serializer = new JavaScriptSerializer();
+            var payload = serializer.DeserializeObject(File.ReadAllText(path)) as Dictionary<string, object>;
+            if (payload == null || !payload.ContainsKey("usage")) return;
+
+            var usage = payload["usage"] as Dictionary<string, object>;
+            if (usage == null || GetUsageRows(usage).Count == 0) return;
+
+            usageData = usage;
+            if (payload.ContainsKey("fetchedAt"))
+            {
+                double fetchedAt;
+                if (TryReadDouble(payload["fetchedAt"], out fetchedAt))
+                {
+                    if (fetchedAt > 1000000000000d)
+                        usageLastFetched = DateTimeOffset.FromUnixTimeMilliseconds((long)fetchedAt).LocalDateTime;
+                    else
+                        usageLastFetched = DateTimeOffset.FromUnixTimeSeconds((long)fetchedAt).LocalDateTime;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void SaveUsageCache(Dictionary<string, object> usage)
+    {
+        try
+        {
+            string path = UsageCachePath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var serializer = new JavaScriptSerializer();
+            var payload = new Dictionary<string, object>();
+            payload["fetchedAt"] = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            payload["usage"] = usage;
+            File.WriteAllText(path, serializer.Serialize(payload));
+        }
+        catch { }
+    }
+
+    private bool FetchUsage(bool force)
+    {
+        try
+        {
+            if (!force && lastUsageAttempt != DateTime.MinValue && (DateTime.Now - lastUsageAttempt).TotalSeconds < 60)
+                return false;
+
+            lastUsageAttempt = DateTime.Now;
+            var usage = RequestCodexUsage();
+            if (usage == null || GetUsageRows(usage).Count == 0)
+                return false;
+
+            usageData = usage;
+            usageLastFetched = DateTime.Now;
+            SaveUsageCache(usage);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private Dictionary<string, object> RequestCodexUsage()
+    {
+        string codexCommand = ResolveCodexCommand();
+        var proc = new Process();
+        proc.StartInfo.FileName = codexCommand;
+        proc.StartInfo.Arguments = "app-server";
+        proc.StartInfo.UseShellExecute = false;
+        proc.StartInfo.RedirectStandardInput = true;
+        proc.StartInfo.RedirectStandardOutput = true;
+        proc.StartInfo.RedirectStandardError = true;
+        proc.StartInfo.CreateNoWindow = true;
+        proc.StartInfo.WorkingDirectory = botDir;
+        proc.Start();
+
+        try
+        {
+            SendJsonLine(proc, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-discord-windows-tray\",\"version\":\"" + EscapeJson(currentVersion) + "\"},\"capabilities\":{\"experimentalApi\":true}}}");
+            var initResponse = ReadJsonResponse(proc, 1, 5000);
+            if (initResponse == null) return null;
+
+            SendJsonLine(proc, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
+            string response = ReadJsonResponse(proc, 2, 5000);
+            if (string.IsNullOrEmpty(response)) return null;
+
+            var serializer = new JavaScriptSerializer();
+            var payload = serializer.DeserializeObject(response) as Dictionary<string, object>;
+            if (payload == null || !payload.ContainsKey("result")) return null;
+
+            return NormalizeUsage(payload["result"] as Dictionary<string, object>);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            try { proc.StandardInput.Close(); } catch { }
+            try { if (!proc.HasExited) proc.Kill(); } catch { }
+            try { proc.Dispose(); } catch { }
+        }
+    }
+
+    private void SendJsonLine(Process proc, string line)
+    {
+        proc.StandardInput.WriteLine(line);
+        proc.StandardInput.Flush();
+    }
+
+    private string ReadJsonLine(Process proc, int timeoutMs)
+    {
+        DateTime deadline = DateTime.Now.AddMilliseconds(timeoutMs);
+        while (DateTime.Now < deadline)
+        {
+            try
+            {
+                if (!proc.HasExited && proc.StandardOutput.Peek() >= 0)
+                {
+                    string line = proc.StandardOutput.ReadLine();
+                    if (!string.IsNullOrWhiteSpace(line))
+                        return line.Trim();
+                }
+                else if (proc.HasExited)
+                {
+                    break;
+                }
+            }
+            catch { break; }
+            Thread.Sleep(50);
+        }
+        return null;
+    }
+
+    private string ReadJsonResponse(Process proc, int expectedId, int timeoutMs)
+    {
+        DateTime deadline = DateTime.Now.AddMilliseconds(timeoutMs);
+        while (DateTime.Now < deadline)
+        {
+            string line = ReadJsonLine(proc, 500);
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.Contains("\"id\":" + expectedId) || line.Contains("\"id\": " + expectedId))
+                return line;
+        }
+        return null;
+    }
+
+    private Dictionary<string, object> NormalizeUsage(Dictionary<string, object> result)
+    {
+        if (result == null) return null;
+
+        Dictionary<string, object> primarySnapshot = null;
+        if (result.ContainsKey("rateLimitsByLimitId"))
+        {
+            var snapshots = result["rateLimitsByLimitId"] as Dictionary<string, object>;
+            if (snapshots != null && snapshots.ContainsKey("codex"))
+            {
+                primarySnapshot = snapshots["codex"] as Dictionary<string, object>;
+            }
+        }
+
+        if (primarySnapshot == null && result.ContainsKey("rateLimits"))
+            primarySnapshot = result["rateLimits"] as Dictionary<string, object>;
+        if (primarySnapshot == null) return null;
+
+        var primary = ReadWindow(primarySnapshot.ContainsKey("primary") ? primarySnapshot["primary"] : null);
+        var secondary = ReadWindow(primarySnapshot.ContainsKey("secondary") ? primarySnapshot["secondary"] : null);
+        if (primary == null && secondary == null) return null;
+
+        var bucket = new Dictionary<string, object>();
+        bucket["title"] = null;
+        if (primary != null) bucket["primary"] = primary;
+        if (secondary != null) bucket["secondary"] = secondary;
+
+        var usage = new Dictionary<string, object>();
+        if (primarySnapshot.ContainsKey("planType"))
+        {
+            string planType = primarySnapshot["planType"] as string;
+            if (!string.IsNullOrWhiteSpace(planType))
+                usage["planType"] = planType;
+        }
+        usage["buckets"] = new object[] { bucket };
+        return usage;
+    }
+
+    private Dictionary<string, object> ReadWindow(object value)
+    {
+        var window = value as Dictionary<string, object>;
+        if (window == null) return null;
+
+        double usedPercent;
+        if (!TryReadDouble(window.ContainsKey("usedPercent") ? window["usedPercent"] : null, out usedPercent))
+            return null;
+
+        var normalized = new Dictionary<string, object>();
+        normalized["usedPercent"] = usedPercent;
+
+        double mins;
+        if (TryReadDouble(window.ContainsKey("windowDurationMins") ? window["windowDurationMins"] : null, out mins))
+            normalized["windowDurationMins"] = mins;
+
+        double resetsAt;
+        if (TryReadDouble(window.ContainsKey("resetsAt") ? window["resetsAt"] : null, out resetsAt))
+            normalized["resetsAt"] = resetsAt;
+
+        return normalized;
+    }
+
+    private bool TryReadDouble(object value, out double number)
+    {
+        number = 0;
+        if (value == null) return false;
+        if (value is int) { number = (int)value; return true; }
+        if (value is long) { number = (long)value; return true; }
+        if (value is float) { number = (float)value; return true; }
+        if (value is double) { number = (double)value; return true; }
+        if (value is decimal) { number = (double)(decimal)value; return true; }
+        return double.TryParse(Convert.ToString(value), out number);
+    }
+
+    private string EscapeJson(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    private List<Dictionary<string, object>> GetUsageRows(Dictionary<string, object> usage)
+    {
+        var rows = new List<Dictionary<string, object>>();
+        if (usage == null || !usage.ContainsKey("buckets")) return rows;
+
+        IEnumerable<object> buckets = null;
+        if (usage["buckets"] is object[])
+            buckets = (object[])usage["buckets"];
+        else if (usage["buckets"] is System.Collections.ArrayList)
+            buckets = ((System.Collections.ArrayList)usage["buckets"]).ToArray();
+        if (buckets == null) return rows;
+
+        foreach (var bucketObj in buckets)
+        {
+            var bucket = bucketObj as Dictionary<string, object>;
+            if (bucket == null) continue;
+
+            object title = bucket.ContainsKey("title") ? bucket["title"] : null;
+            var primary = bucket.ContainsKey("primary") ? bucket["primary"] as Dictionary<string, object> : null;
+            var secondary = bucket.ContainsKey("secondary") ? bucket["secondary"] as Dictionary<string, object> : null;
+
+            if (primary != null)
+            {
+                var row = new Dictionary<string, object>();
+                row["bucketTitle"] = title;
+                row["window"] = primary;
+                rows.Add(row);
+            }
+            if (secondary != null)
+            {
+                var row = new Dictionary<string, object>();
+                row["bucketTitle"] = null;
+                row["window"] = secondary;
+                rows.Add(row);
+            }
+        }
+
+        return rows;
+    }
+
+    private int UsagePercentLeft(Dictionary<string, object> window)
+    {
+        double usedPercent;
+        if (!TryReadDouble(window.ContainsKey("usedPercent") ? window["usedPercent"] : null, out usedPercent))
+            return 0;
+        int percentLeft = 100 - (int)Math.Round(usedPercent);
+        return Math.Max(0, Math.Min(100, percentLeft));
+    }
+
+    private string UsageLabel(Dictionary<string, object> window)
+    {
+        double mins;
+        if (TryReadDouble(window.ContainsKey("windowDurationMins") ? window["windowDurationMins"] : null, out mins))
+        {
+            if ((int)mins == 300) return L("5-hour limit", "5시간 한도");
+            if ((int)mins == 10080) return L("7-day limit", "7일 한도");
+            return L(((int)mins) + "-minute limit", ((int)mins) + "분 한도");
+        }
+        return L("Usage limit", "사용량 한도");
+    }
+
+    private string UsageResetText(Dictionary<string, object> window)
+    {
+        double resetsAt;
+        if (!TryReadDouble(window.ContainsKey("resetsAt") ? window["resetsAt"] : null, out resetsAt))
+            return "";
+
+        DateTime reset = DateTimeOffset.FromUnixTimeSeconds((long)resetsAt).LocalDateTime;
+        DateTime now = DateTime.Now;
+        if (reset.Date == now.Date)
+        {
+            string formatted = reset.ToString("h:mm tt");
+            return L("Resets " + formatted, formatted + " 초기화");
+        }
+
+        string dateText = reset.ToString("MMM d");
+        return L("Resets on " + dateText, dateText + " 초기화");
+    }
+
+    private string FetchedLabel()
+    {
+        if (!usageLastFetched.HasValue) return "";
+
+        TimeSpan ago = DateTime.Now - usageLastFetched.Value;
+        if (ago.TotalMinutes < 1)
+            return L("Updated just now", "방금 갱신");
+        if (ago.TotalHours < 1)
+            return L("Updated " + (int)ago.TotalMinutes + "m ago", (int)ago.TotalMinutes + "분 전 갱신");
+        return L("Updated " + (int)ago.TotalHours + "h ago", (int)ago.TotalHours + "시간 전 갱신");
+    }
+
+    private Color UsageBarColor(int percentLeft)
+    {
+        if (percentLeft <= 10) return Color.FromArgb(255, 95, 95);
+        if (percentLeft <= 30) return Color.FromArgb(255, 186, 73);
+        return Color.FromArgb(72, 163, 255);
+    }
+
+    private void OpenUsagePage(object sender, EventArgs e)
+    {
+        try { Process.Start(UsageUrl); } catch { }
+    }
+
+    private void RefreshUsageAsync(bool force)
+    {
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            bool changed = FetchUsage(force);
+            if (controlPanel != null && !controlPanel.IsDisposed)
+            {
+                try
+                {
+                    controlPanel.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (changed || GetUsageRows(usageData).Count == 0)
+                            RebuildControlPanel();
+                    });
+                }
+                catch { }
+            }
+        });
     }
 
     private void FetchReleaseNotes()
@@ -420,7 +873,7 @@ class CodexBotTray : Form
                 "    goto :done\r\n" +
                 ")\r\n" +
                 "echo [%date% %time%] Compiling with !CSC! >> \"%LOG%\"\r\n" +
-                "\"!CSC!\" /nologo /target:winexe /out:\"" + trayExe + "\" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll \"" + traySrc + "\" >> \"%LOG%\" 2>&1\r\n" +
+                "\"!CSC!\" /nologo /target:winexe /out:\"" + trayExe + "\" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll \"" + traySrc + "\" >> \"%LOG%\" 2>&1\r\n" +
                 "if exist \"" + trayExe + "\" (\r\n" +
                 "    echo [%date% %time%] Compile OK, restarting >> \"%LOG%\"\r\n" +
                 "    start \"\" \"" + trayExe + "\" --show\r\n" +
@@ -1112,6 +1565,8 @@ class CodexBotTray : Form
         SetDarkTitleBar(controlPanel);
 
         RebuildControlPanel();
+        if (usageLastFetched == null || (DateTime.Now - usageLastFetched.Value).TotalMinutes > 5)
+            RefreshUsageAsync(true);
         controlPanel.ShowDialog();
         controlPanel = null;
     }
@@ -1237,6 +1692,160 @@ class CodexBotTray : Form
         statusPanel.Controls.Add(statusLabel);
         controlPanel.Controls.Add(statusPanel);
         y += 62;
+
+        var usageRows = GetUsageRows(usageData);
+        if (usageRows.Count > 0)
+        {
+            int usageHeight = 90 + usageRows.Count * 52 + (usageLastFetched.HasValue ? 24 : 0);
+            if (usageData.ContainsKey("planType")) usageHeight += 20;
+
+            var usagePanel = new Panel() { Left = 25, Top = y, Width = btnWidth, Height = usageHeight, BackColor = BgPanel, Cursor = Cursors.Hand };
+            using (var path = RoundedRect(new Rectangle(0, 0, btnWidth, usageHeight), 8))
+                usagePanel.Region = new Region(path);
+            usagePanel.Click += OpenUsagePage;
+            controlPanel.Controls.Add(usagePanel);
+
+            int uy = 12;
+            var usageTitle = new Label()
+            {
+                Text = L("Codex Usage", "Codex 사용량"),
+                Left = 14, Top = uy, Width = 220, Height = 18,
+                Font = new Font(FontFamily.GenericSansSerif, 10, FontStyle.Bold),
+                ForeColor = FgWhite, BackColor = Color.Transparent
+            };
+            usageTitle.Click += OpenUsagePage;
+            usagePanel.Controls.Add(usageTitle);
+
+            var refreshBtn = MakeDarkButton(L("Refresh", "새로고침"), btnWidth - 94, 10, 80, 28, BgButton, FgWhite);
+            refreshBtn.Click += (s, ev) => { RefreshUsageAsync(true); };
+            usagePanel.Controls.Add(refreshBtn);
+            uy += 26;
+
+            if (usageData.ContainsKey("planType"))
+            {
+                var planLabel = new Label()
+                {
+                    Text = L("Plan", "플랜") + ": " + Convert.ToString(usageData["planType"]),
+                    Left = 14, Top = uy, Width = btnWidth - 28, Height = 16,
+                    Font = new Font(FontFamily.GenericSansSerif, 8.5f),
+                    ForeColor = FgDimGray, BackColor = Color.Transparent
+                };
+                planLabel.Click += OpenUsagePage;
+                usagePanel.Controls.Add(planLabel);
+                uy += 20;
+            }
+
+            string previousTitle = null;
+            foreach (var row in usageRows)
+            {
+                string bucketTitle = row["bucketTitle"] == null ? null : Convert.ToString(row["bucketTitle"]);
+                var window = row["window"] as Dictionary<string, object>;
+                if (window == null) continue;
+
+                if (!string.IsNullOrWhiteSpace(bucketTitle) && bucketTitle != previousTitle)
+                {
+                    var bucketLabel = new Label()
+                    {
+                        Text = bucketTitle,
+                        Left = 14, Top = uy, Width = btnWidth - 28, Height = 16,
+                        Font = new Font(FontFamily.GenericSansSerif, 8.5f, FontStyle.Bold),
+                        ForeColor = FgGray, BackColor = Color.Transparent
+                    };
+                    bucketLabel.Click += OpenUsagePage;
+                    usagePanel.Controls.Add(bucketLabel);
+                    uy += 18;
+                    previousTitle = bucketTitle;
+                }
+
+                int percentLeft = UsagePercentLeft(window);
+                var nameLabel = new Label()
+                {
+                    Text = UsageLabel(window),
+                    Left = 14, Top = uy, Width = 200, Height = 18,
+                    Font = new Font(FontFamily.GenericSansSerif, 9.5f, FontStyle.Bold),
+                    ForeColor = FgGray, BackColor = Color.Transparent
+                };
+                nameLabel.Click += OpenUsagePage;
+                usagePanel.Controls.Add(nameLabel);
+
+                var pctLabel = new Label()
+                {
+                    Text = percentLeft + "% " + L("left", "남음"),
+                    Left = btnWidth - 130, Top = uy, Width = 116, Height = 18,
+                    TextAlign = ContentAlignment.MiddleRight,
+                    Font = new Font(FontFamily.GenericSansSerif, 9.5f, FontStyle.Bold),
+                    ForeColor = UsageBarColor(percentLeft), BackColor = Color.Transparent
+                };
+                pctLabel.Click += OpenUsagePage;
+                usagePanel.Controls.Add(pctLabel);
+                uy += 22;
+
+                var barBg = new Panel()
+                {
+                    Left = 14, Top = uy, Width = btnWidth - 28, Height = 10,
+                    BackColor = Color.FromArgb(56, 56, 56)
+                };
+                barBg.Click += OpenUsagePage;
+                usagePanel.Controls.Add(barBg);
+
+                int fillWidth = (int)Math.Round((btnWidth - 28) * (percentLeft / 100.0));
+                if (fillWidth > 0)
+                {
+                    var barFill = new Panel()
+                    {
+                        Left = 14, Top = uy, Width = fillWidth, Height = 10,
+                        BackColor = UsageBarColor(percentLeft)
+                    };
+                    barFill.Click += OpenUsagePage;
+                    usagePanel.Controls.Add(barFill);
+                    barFill.BringToFront();
+                }
+                uy += 14;
+
+                string resetText = UsageResetText(window);
+                if (!string.IsNullOrWhiteSpace(resetText))
+                {
+                    var resetLabel = new Label()
+                    {
+                        Text = resetText,
+                        Left = 14, Top = uy, Width = btnWidth - 28, Height = 14,
+                        Font = new Font(FontFamily.GenericSansSerif, 8),
+                        ForeColor = FgDimGray, BackColor = Color.Transparent
+                    };
+                    resetLabel.Click += OpenUsagePage;
+                    usagePanel.Controls.Add(resetLabel);
+                    uy += 18;
+                }
+                else
+                {
+                    uy += 6;
+                }
+            }
+
+            string fetchedText = FetchedLabel();
+            if (!string.IsNullOrWhiteSpace(fetchedText))
+            {
+                var fetchedLabel = new Label()
+                {
+                    Text = fetchedText,
+                    Left = 14, Top = uy, Width = btnWidth - 28, Height = 14,
+                    TextAlign = ContentAlignment.MiddleRight,
+                    Font = new Font(FontFamily.GenericSansSerif, 8),
+                    ForeColor = FgDimGray, BackColor = Color.Transparent
+                };
+                fetchedLabel.Click += OpenUsagePage;
+                usagePanel.Controls.Add(fetchedLabel);
+            }
+
+            y += usageHeight + 12;
+        }
+        else if (hasEnv)
+        {
+            var loadUsageBtn = MakeDarkButton(L("Load Usage Info", "사용량 정보 불러오기"), 25, y, btnWidth, 42, BgButton, FgWhite);
+            loadUsageBtn.Click += (s, ev) => { RefreshUsageAsync(true); };
+            controlPanel.Controls.Add(loadUsageBtn);
+            y += 54;
+        }
 
         // Bot control buttons
         if (hasEnv)

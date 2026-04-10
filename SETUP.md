@@ -29,6 +29,13 @@ codex --version
 codex login status
 ```
 
+On Windows PowerShell, `codex` may resolve to `codex.ps1`, which can be blocked by execution policy. If that happens, verify the CLI with:
+
+```powershell
+codex.cmd --version
+codex.cmd login status
+```
+
 If `codex login status` does not show a logged-in account, complete login first:
 
 ```bash
@@ -276,6 +283,8 @@ Behavior:
 - background start script
 - tray companion app when available
 - foreground mode for debugging
+- the tray panel shows bot status, controls, and cached Codex usage
+- the launcher auto-detects a working Codex command on Windows and caches it in `~/.codex/codex-discord-runtime.json`
 
 ## 7. First Discord Test
 
@@ -364,9 +373,16 @@ Check:
 Check:
 
 - `codex login status`
+- on Windows PowerShell, also try `codex.cmd login status`
 - the bot is running on the same machine and account that has the Codex login
 - the background launcher can find `node`
 - you did not set up the project expecting an `.env` API key flow
+
+Windows note:
+
+- PowerShell may pick `codex.ps1` first, while the bot and tray work better with `codex.cmd`
+- the Windows launcher caches the detected command in `~/.codex/codex-discord-runtime.json`
+- cached usage data is stored in `~/.codex/rate-limits-cache.json`
 
 Foreground mode is the fastest way to debug:
 

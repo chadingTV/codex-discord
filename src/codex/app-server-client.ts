@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { EventEmitter } from "node:events";
+import { resolveCodexCommand } from "./command-resolver.js";
 
 export interface CodexTurn {
   id: string;
@@ -63,13 +64,19 @@ interface JsonRpcServerRequest {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  timeout: NodeJS.Timeout;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function shouldUseShell(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
+}
+
 export class CodexAppServerClient extends EventEmitter {
+  private static readonly REQUEST_TIMEOUT_MS = 15_000;
   private process: ChildProcessWithoutNullStreams | null = null;
   private nextRequestId = 1;
   private pendingRequests = new Map<number, PendingRequest>();
@@ -89,18 +96,26 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async startInternal(): Promise<void> {
-    this.process = spawn("codex", ["app-server"], {
+    const codexCommand = resolveCodexCommand();
+    this.process = spawn(codexCommand, ["app-server"], {
       stdio: ["pipe", "pipe", "pipe"],
+      shell: shouldUseShell(codexCommand),
+      windowsHide: true,
+    });
+
+    this.process.once("error", (error) => {
+      const reason = new Error(`Failed to start Codex app-server via \`${codexCommand}\`: ${error.message}`);
+      this.rejectPendingRequests(reason);
+      this.initialized = false;
+      this.process = null;
+      this.emit("exit", reason);
     });
 
     this.process.once("exit", (code, signal) => {
       const reason = new Error(`Codex app-server exited (${code ?? "null"}${signal ? `, ${signal}` : ""})`);
       this.initialized = false;
       this.process = null;
-      for (const [id, pending] of this.pendingRequests) {
-        this.pendingRequests.delete(id);
-        pending.reject(reason);
-      }
+      this.rejectPendingRequests(reason);
       this.emit("exit", reason);
     });
 
@@ -153,6 +168,7 @@ export class CodexAppServerClient extends EventEmitter {
       const id = Number(payload.id);
       const pending = this.pendingRequests.get(id);
       if (!pending) return;
+      clearTimeout(pending.timeout);
       this.pendingRequests.delete(id);
       pending.resolve(payload.result);
       return;
@@ -162,6 +178,7 @@ export class CodexAppServerClient extends EventEmitter {
       const id = Number(payload.id);
       const pending = this.pendingRequests.get(id);
       if (!pending) return;
+      clearTimeout(pending.timeout);
       this.pendingRequests.delete(id);
       const errorMessage =
         isObject(payload.error) && typeof payload.error.message === "string"
@@ -176,9 +193,15 @@ export class CodexAppServerClient extends EventEmitter {
 
     const id = this.nextRequestId++;
     const response = new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`Codex app-server request timed out: ${method}`));
+      }, CodexAppServerClient.REQUEST_TIMEOUT_MS);
+
       this.pendingRequests.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
+        timeout,
       });
     });
 
@@ -187,6 +210,14 @@ export class CodexAppServerClient extends EventEmitter {
     );
 
     return response;
+  }
+
+  private rejectPendingRequests(reason: Error): void {
+    for (const [id, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(id);
+      pending.reject(reason);
+    }
   }
 
   async request<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
