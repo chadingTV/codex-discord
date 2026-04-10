@@ -138,7 +138,7 @@ echo [6/6] Creating desktop shortcut...
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "SHORTCUT_VBS=%TEMP%\create-shortcut.vbs"
-set "DESKTOP=%USERPROFILE%\Desktop"
+for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%D"
 
 echo Set oWS = WScript.CreateObject("WScript.Shell") > "%SHORTCUT_VBS%"
 echo sLinkFile = "%DESKTOP%\Codex Discord Bot.lnk" >> "%SHORTCUT_VBS%"

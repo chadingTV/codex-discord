@@ -118,6 +118,8 @@ if launchctl list | grep -q "$LABEL"; then
     launchctl unload "$PLIST_DST" 2>/dev/null
     sleep 1
 fi
+# Also kill any orphaned bot processes not managed by launchd
+pkill -f "node dist/index.js" 2>/dev/null && sleep 1
 
 # Compile menu bar app (rebuild if source is newer than binary)
 if [ -f "$SCRIPT_DIR/menubar/CodexBotMenu.swift" ]; then
@@ -157,6 +159,26 @@ is_env_configured() {
 }
 
 generate_plist() {
+    # Resolve node bin directory for PATH (nvm, fnm, nodenv, homebrew, etc.)
+    local NODE_BIN_DIR=""
+    export NVM_DIR="$HOME/.nvm"
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
+        . "$NVM_DIR/nvm.sh"
+        NODE_BIN_DIR="$(dirname "$(which node)" 2>/dev/null)"
+    fi
+    if [ -z "$NODE_BIN_DIR" ]; then
+        for p in /opt/homebrew/bin /usr/local/bin "$HOME/.nodenv/shims" "$HOME/.fnm/aliases/default/bin"; do
+            if [ -x "$p/node" ]; then
+                NODE_BIN_DIR="$p"
+                break
+            fi
+        done
+    fi
+    local PLIST_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    if [ -n "$NODE_BIN_DIR" ] && [[ ":$PLIST_PATH:" != *":$NODE_BIN_DIR:"* ]]; then
+        PLIST_PATH="$NODE_BIN_DIR:$PLIST_PATH"
+    fi
+
     cat > "$PLIST_DST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -185,7 +207,7 @@ generate_plist() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>$PLIST_PATH</string>
     </dict>
 </dict>
 </plist>
