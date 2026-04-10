@@ -43,7 +43,7 @@ If you previously used an API-key-based workflow elsewhere, leave that out here 
 ### Recommended: installer script
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 ./install.sh
 ```
@@ -51,7 +51,7 @@ cd codex-discord
 Windows:
 
 ```bat
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 install.bat
 ```
@@ -67,7 +67,7 @@ The install scripts:
 ### Manual install
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 npm install
 npm run build

@@ -43,7 +43,7 @@ codex login
 ### 권장: 설치 스크립트 사용
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 ./install.sh
 ```
@@ -51,7 +51,7 @@ cd codex-discord
 Windows:
 
 ```bat
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 install.bat
 ```
@@ -67,7 +67,7 @@ install.bat
 ### 수동 설치
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 npm install
 npm run build

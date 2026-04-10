@@ -81,7 +81,7 @@ Because it reads local Codex thread storage under `~/.codex`, threads created in
 ## Installation
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 
 # macOS / Linux

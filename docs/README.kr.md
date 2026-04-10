@@ -81,7 +81,7 @@ Discord를 Codex 제어 UI로 사용합니다.
 ## 설치
 
 ```bash
-git clone git@github.com:chadingTV/codex-discord.git
+git clone https://github.com/chadingTV/codex-discord.git
 cd codex-discord
 
 # macOS / Linux

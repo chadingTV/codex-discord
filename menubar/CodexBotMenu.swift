@@ -528,7 +528,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = runShell("cd '\(botDir)' && git stash push -u -m codex-discord-auto-update >/dev/null 2>&1")
             }
 
-            let output = runShell("cd '\(botDir)' && git pull origin main --tags && npm install && npm rebuild better-sqlite3 && npm run build 2>&1")
+            runShell("cd '\(botDir)' && git fetch origin main --tags")
+            let pullOutput = runShell("cd '\(botDir)' && git reset --hard origin/main 2>&1")
+
+            let afterPull = runShell("cd '\(botDir)' && git rev-parse HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
+            let remote = runShell("cd '\(botDir)' && git rev-parse origin/main").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !afterPull.isEmpty && !remote.isEmpty && afterPull != remote {
+                if hasLocalChanges {
+                    _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")
+                }
+                let errAlert = NSAlert()
+                errAlert.messageText = L("Update Failed", "업데이트 실패")
+                errAlert.informativeText = L("git pull failed:\n", "git pull 실패:\n") + pullOutput
+                errAlert.alertStyle = .critical
+                errAlert.runModal()
+                if wasRunning {
+                    generatePlist()
+                    runShell("launchctl load '\(plistDst)'")
+                }
+                return
+            }
+
+            let output = runShell("cd '\(botDir)' && npm install && npm rebuild better-sqlite3 && npm run build 2>&1")
 
             if hasLocalChanges {
                 _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")
