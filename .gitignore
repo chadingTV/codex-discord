@@ -5,10 +5,14 @@ dist/
 *.db-shm
 *.db-wal
 .claude/
+.codex
+.codex/
 .claude-uploads/
 .codex-uploads/
 .vscode/
 .DS_Store
+__pycache__/
+*.py[cod]
 CLAUDE.md
 AGENTS.md
 .bot.lock

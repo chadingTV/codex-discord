@@ -1,4 +1,4 @@
-MIT License
+MIT License with Attribution Requirement
 
 Copyright (c) 2026 chadingTV (https://github.com/chadingTV/codex-discord)
 
@@ -11,6 +11,12 @@ furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
+If you distribute a modified version of this Software, you must clearly state
+that it is based on codex-discord and include a visible attribution to:
+https://github.com/chadingTV/codex-discord
+This attribution must appear in the source repository, documentation, or other
+reasonably visible distribution materials.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
