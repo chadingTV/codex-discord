@@ -1127,11 +1127,18 @@ class CodexBotTray : Form
             }
         }
         catch { }
-        // Use absolute path to CodexBot.exe so cmd can find it
+        // Use absolute paths so auto-start still works if the install path contains spaces
         string botExePath = File.Exists(codexBotExe) ? "\"" + codexBotExe + "\"" : "node";
+        string lockFile = Path.Combine(botDir, ".bot.lock");
+        string logFile = Path.Combine(botDir, "bot.log");
+        string entryScript = Path.Combine(botDir, "dist", "index.js");
         // Run bot hidden via vbs
         string vbs = Path.Combine(botDir, ".bot-start.vbs");
-        string cmd = "cmd /c cd /d " + botDir + " & echo running> .bot.lock & " + botExePath + " dist/index.js >> bot.log 2>&1 & del .bot.lock";
+        string cmd =
+            "cmd /c cd /d \"" + botDir + "\"" +
+            " & echo running> \"" + lockFile + "\"" +
+            " & " + botExePath + " \"" + entryScript + "\" >> \"" + logFile + "\" 2>&1" +
+            " & del \"" + lockFile + "\"";
         File.WriteAllText(vbs, "Set ws = CreateObject(\"WScript.Shell\")\nws.Run \"" + cmd.Replace("\"", "\"\"") + "\", 0, False\n");
         Process.Start("wscript", "\"" + vbs + "\"");
         // Wait for bot to start, then show notification
