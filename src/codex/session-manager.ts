@@ -116,11 +116,32 @@ export class SessionManager {
     const dbId = existingSession?.dbId ?? dbSession?.id ?? randomUUID();
     let threadId = existingSession?.threadId ?? dbSession?.session_id ?? null;
 
-    if (!threadId) {
-      const thread = await codexAppServer.startThread(project.project_path);
-      threadId = thread.id;
-    } else if (!existingSession) {
-      await codexAppServer.resumeThread(threadId);
+    try {
+      if (!threadId) {
+        const thread = await codexAppServer.startThread(project.project_path);
+        threadId = thread.id;
+      } else if (!existingSession) {
+        await codexAppServer.resumeThread(threadId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to prepare Codex thread";
+      const isResumeFailure = Boolean(threadId) && !existingSession;
+      if (isResumeFailure) {
+        console.error(`[codex] Failed to resume thread ${threadId} for channel ${channelId}:`, message);
+        await channel.send(
+          `❌ ${L("Failed to resume the selected Codex session", "선택한 Codex 세션을 재개하지 못했습니다")}: ${message}\n` +
+          L(
+            "Try `/sessions` again or choose `Create New Session`.",
+            "`/sessions`를 다시 열거나 `새 세션 만들기`를 선택해 보세요."
+          ),
+        ).catch(() => {});
+      } else {
+        console.error(`[codex] Failed to start thread for channel ${channelId}:`, message);
+        await channel.send(`❌ ${message}`).catch(() => {});
+      }
+      updateSessionStatus(channelId, "offline");
+      this.finishSession(channelId);
+      return;
     }
 
     upsertSession(dbId, channelId, threadId, "online");
