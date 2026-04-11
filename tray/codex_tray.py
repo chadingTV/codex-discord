@@ -191,8 +191,25 @@ def fetch_release_notes():
         formatted = "\n\n".join(
             f"━━━ {tag} ━━━\n{_strip_markdown(body)}" for tag, body in notes
         )
-        cached_release_notes = formatted
-        cached_new_version = latest_tag
+        fallback_version = subprocess.run(
+            ["git", "describe", "--tags", "--always", "origin/main"],
+            capture_output=True, text=True, cwd=BOT_DIR
+        ).stdout.strip()
+        commits = subprocess.run(
+            ["git", "log", "--pretty=format:- %h %s", "HEAD..origin/main"],
+            capture_output=True, text=True, cwd=BOT_DIR
+        ).stdout.strip()
+        fallback_notes = (
+            L("Commits included in this update:\n", "이번 업데이트에 포함된 커밋:\n") + commits
+            if commits else
+            L(
+                "An update is available, but no release notes or commit summary were found.",
+                "업데이트가 가능하지만 릴리즈 노트나 커밋 요약을 찾지 못했습니다."
+            )
+        )
+
+        cached_release_notes = formatted or fallback_notes
+        cached_new_version = latest_tag if latest_tag != current_tag else fallback_version
     except Exception:
         cached_release_notes = ""
         cached_new_version = ""

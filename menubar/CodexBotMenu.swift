@@ -216,13 +216,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let formatted = notes.map { "━━━ \($0.tag) ━━━\n\(self.stripMarkdown($0.body))" }
                 .joined(separator: "\n\n")
+            let fallback = self.fallbackCommitPreview()
+            let resolvedVersion = latestTag == currentTag ? fallback.version : latestTag
+            let resolvedNotes = formatted.isEmpty ? fallback.notes : formatted
 
             DispatchQueue.main.async {
-                self.cachedReleaseNotes = formatted
-                self.cachedNewVersion = latestTag
+                self.cachedReleaseNotes = resolvedNotes
+                self.cachedNewVersion = resolvedVersion
             }
         }.resume()
         semaphore.wait()
+    }
+
+    private func fallbackCommitPreview() -> (version: String, notes: String) {
+        let version = runShell("cd '\(botDir)' && git describe --tags --always origin/main 2>/dev/null")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let commits = runShell("cd '\(botDir)' && git log --pretty=format:'- %h %s' HEAD..origin/main 2>/dev/null | head -20")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = commits.isEmpty
+            ? L(
+                "An update is available, but no release notes or commit summary were found.",
+                "업데이트가 가능하지만 릴리즈 노트나 커밋 요약을 찾지 못했습니다."
+            )
+            : L("Commits included in this update:\n", "이번 업데이트에 포함된 커밋:\n") + commits
+        return (version: version, notes: notes)
     }
 
     private func extractTag(from version: String) -> String {

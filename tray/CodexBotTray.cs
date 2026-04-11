@@ -719,14 +719,36 @@ class CodexBotTray : Form
                 else if (line == "NOTES:") inNotes = true;
                 else if (inNotes) noteLines.Add(line);
             }
-            cachedNewVersion = latestVersion;
-            cachedReleaseNotes = string.Join("\r\n", noteLines.ToArray());
+            string formattedNotes = string.Join("\r\n", noteLines.ToArray()).Trim();
+            string fallbackVersion = RunCmdOutput("git", "-C \"" + botDir + "\" describe --tags --always origin/main").Trim();
+            string fallbackNotes = BuildCommitPreview();
+
+            cachedNewVersion = !string.IsNullOrWhiteSpace(latestVersion) ? latestVersion : fallbackVersion;
+            cachedReleaseNotes = !string.IsNullOrWhiteSpace(formattedNotes) ? formattedNotes : fallbackNotes;
         }
         catch
         {
             cachedReleaseNotes = "";
             cachedNewVersion = "";
         }
+    }
+
+    private string BuildCommitPreview()
+    {
+        string commits = RunCmdOutput(
+            "git",
+            "-C \"" + botDir + "\" log --pretty=format:\"- %h %s\" HEAD..origin/main"
+        ).Trim();
+
+        if (!string.IsNullOrWhiteSpace(commits))
+        {
+            return L("Commits included in this update:\r\n", "이번 업데이트에 포함된 커밋:\r\n") + commits;
+        }
+
+        return L(
+            "An update is available, but no release notes or commit summary were found.",
+            "업데이트가 가능하지만 릴리즈 노트나 커밋 요약을 찾지 못했습니다."
+        );
     }
 
     private DialogResult ShowUpdateDialog()
