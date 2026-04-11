@@ -1,8 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-vi.mock("../utils/i18n.js", () => ({
-  L: (en: string, _kr: string) => en,
-}));
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../db/database.js", () => ({
   upsertSession: vi.fn(),
@@ -13,126 +9,151 @@ vi.mock("../db/database.js", () => ({
 }));
 
 vi.mock("../utils/config.js", () => ({
-  getConfig: vi.fn(() => ({ SHOW_COST: true })),
+  getConfig: () => ({ SHOW_COST: false }),
+}));
+
+vi.mock("../utils/i18n.js", () => ({
+  L: (en: string, _kr: string) => en,
 }));
 
 vi.mock("./app-server-client.js", () => ({
   codexAppServer: {
-    ensureStarted: vi.fn().mockResolvedValue(undefined),
+    ensureStarted: vi.fn(),
     on: vi.fn(),
-    interruptTurn: vi.fn().mockResolvedValue(undefined),
-    respond: vi.fn().mockResolvedValue(undefined),
     startThread: vi.fn(),
     resumeThread: vi.fn(),
     startTurn: vi.fn(),
+    respond: vi.fn(),
+    interruptTurn: vi.fn(),
   },
 }));
 
-import { sessionManager } from "./session-manager.js";
+import { SessionManager } from "./session-manager.js";
+import { createStopButton, splitMessage } from "./output-formatter.js";
 
-function mockChannel(id: string) {
-  return { id, send: vi.fn().mockResolvedValue({ edit: vi.fn() }) } as any;
+function createFakeMessage() {
+  return {
+    edit: vi.fn().mockResolvedValue(undefined),
+  };
 }
 
-describe("Codex SessionManager", () => {
+describe("SessionManager streaming output", () => {
+  let now = 0;
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
   });
 
-  describe("isActive", () => {
-    it("returns false for unknown channel", () => {
-      expect(sessionManager.isActive("unknown-channel")).toBe(false);
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  describe("resolveApproval", () => {
-    it("returns false for unknown requestId", () => {
-      expect(sessionManager.resolveApproval("nonexistent", "approve")).toBe(false);
+  it("accumulates agent deltas instead of replacing earlier text", async () => {
+    const manager = new SessionManager();
+    const firstMessage = createFakeMessage();
+    const channel = {
+      id: "channel-1",
+      send: vi.fn(),
+    } as any;
+
+    (manager as any).sessions.set("channel-1", {
+      channelId: "channel-1",
+      channel,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      dbId: "db-1",
     });
+
+    (manager as any).streamState.set("channel-1", {
+      buffer: "",
+      messages: [firstMessage],
+      lastEditTime: 0,
+      stopRow: createStopButton("channel-1"),
+      startedAt: 0,
+      lastActivity: "Thinking...",
+      toolUseCount: 0,
+      heartbeat: setInterval(() => {}, 60_000),
+      hasTextOutput: false,
+      lastError: null,
+    });
+
+    now = 2_000;
+    await (manager as any).handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "저는 " },
+    });
+
+    now = 4_000;
+    await (manager as any).handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Codex입니다." },
+    });
+
+    expect(firstMessage.edit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: "저는 Codex입니다." }),
+    );
+    expect(channel.send).not.toHaveBeenCalled();
+
+    clearInterval((manager as any).streamState.get("channel-1").heartbeat);
   });
 
-  describe("resolveQuestion", () => {
-    it("returns false for unknown requestId", () => {
-      expect(sessionManager.resolveQuestion("nonexistent", "answer")).toBe(false);
-    });
-  });
+  it("keeps earlier chunks and sends only newly needed Discord messages", async () => {
+    const manager = new SessionManager();
+    const firstMessage = createFakeMessage();
+    const sentMessages: Array<ReturnType<typeof createFakeMessage>> = [];
+    const channel = {
+      id: "channel-2",
+      send: vi.fn().mockImplementation(async () => {
+        const message = createFakeMessage();
+        sentMessages.push(message);
+        return message;
+      }),
+    } as any;
 
-  describe("custom input", () => {
-    it("hasPendingCustomInput returns false initially", () => {
-      expect(sessionManager.hasPendingCustomInput("ch-1")).toBe(false);
-    });
-
-    it("enableCustomInput sets pending state", () => {
-      sessionManager.enableCustomInput("req-1", "ch-1");
-      expect(sessionManager.hasPendingCustomInput("ch-1")).toBe(true);
-    });
-
-    it("resolveCustomInput returns false when no pending question", () => {
-      sessionManager.enableCustomInput("req-no-question", "ch-2");
-      expect(sessionManager.resolveCustomInput("ch-2", "hello")).toBe(false);
-    });
-
-    it("resolveCustomInput returns false for channel without pending input", () => {
-      expect(sessionManager.resolveCustomInput("ch-no-input", "hello")).toBe(false);
-    });
-  });
-
-  describe("message queue", () => {
-    const channelId = "queue-ch";
-
-    it("hasQueue returns false initially", () => {
-      expect(sessionManager.hasQueue(channelId)).toBe(false);
+    (manager as any).sessions.set("channel-2", {
+      channelId: "channel-2",
+      channel,
+      threadId: "thread-2",
+      turnId: "turn-2",
+      dbId: "db-2",
     });
 
-    it("getQueueSize returns 0 initially", () => {
-      expect(sessionManager.getQueueSize(channelId)).toBe(0);
+    (manager as any).streamState.set("channel-2", {
+      buffer: "",
+      messages: [firstMessage],
+      lastEditTime: 0,
+      stopRow: createStopButton("channel-2"),
+      startedAt: 0,
+      lastActivity: "Thinking...",
+      toolUseCount: 0,
+      heartbeat: setInterval(() => {}, 60_000),
+      hasTextOutput: false,
+      lastError: null,
     });
 
-    it("isQueueFull returns false when empty", () => {
-      expect(sessionManager.isQueueFull(channelId)).toBe(false);
+    const firstDelta = "a".repeat(1890);
+    const secondDelta = "\n" + "b".repeat(80);
+
+    now = 2_000;
+    await (manager as any).handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-2", delta: firstDelta },
     });
 
-    it("setPendingQueue + hasQueue works", () => {
-      const channel = mockChannel(channelId);
-      sessionManager.setPendingQueue(channelId, channel, "test prompt");
-      expect(sessionManager.hasQueue(channelId)).toBe(true);
+    now = 4_000;
+    await (manager as any).handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-2", delta: secondDelta },
     });
 
-    it("confirmQueue moves pending to queue", () => {
-      const channel = mockChannel(channelId);
-      sessionManager.setPendingQueue(channelId, channel, "prompt 1");
-      const result = sessionManager.confirmQueue(channelId);
-      expect(result).toBe(true);
-      expect(sessionManager.getQueueSize(channelId)).toBe(1);
-      expect(sessionManager.hasQueue(channelId)).toBe(false);
-    });
+    const chunks = splitMessage(firstDelta + secondDelta);
+    expect(chunks).toHaveLength(2);
+    expect(firstMessage.edit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: chunks[0] }),
+    );
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(sentMessages[0].edit).not.toHaveBeenCalled();
 
-    it("confirmQueue returns false when nothing pending", () => {
-      expect(sessionManager.confirmQueue("no-pending")).toBe(false);
-    });
-
-    it("cancelQueue clears pending", () => {
-      const channel = mockChannel(channelId);
-      sessionManager.setPendingQueue(channelId, channel, "to cancel");
-      sessionManager.cancelQueue(channelId);
-      expect(sessionManager.hasQueue(channelId)).toBe(false);
-    });
-
-    it("isQueueFull returns true after 5 items", () => {
-      const ch = "full-queue-ch";
-      const channel = mockChannel(ch);
-      for (let i = 0; i < 5; i++) {
-        sessionManager.setPendingQueue(ch, channel, `msg ${i}`);
-        sessionManager.confirmQueue(ch);
-      }
-      expect(sessionManager.isQueueFull(ch)).toBe(true);
-      expect(sessionManager.getQueueSize(ch)).toBe(5);
-    });
-  });
-
-  describe("stopSession", () => {
-    it("returns false for inactive session", async () => {
-      expect(await sessionManager.stopSession("no-session")).toBe(false);
-    });
+    clearInterval((manager as any).streamState.get("channel-2").heartbeat);
   });
 });

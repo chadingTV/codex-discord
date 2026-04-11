@@ -36,6 +36,20 @@ interface QuestionPayload {
 
 type ApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
+type StreamMessage = Awaited<ReturnType<TextChannel["send"]>>;
+type StreamState = {
+  buffer: string;
+  messages: StreamMessage[];
+  lastEditTime: number;
+  stopRow: ReturnType<typeof createStopButton>;
+  startedAt: number;
+  lastActivity: string;
+  toolUseCount: number;
+  heartbeat: NodeJS.Timeout;
+  hasTextOutput: boolean;
+  lastError: string | null;
+};
+
 const pendingApprovals = new Map<
   number,
   {
@@ -55,27 +69,13 @@ const pendingQuestions = new Map<
 
 const pendingCustomInputs = new Map<string, { requestId: number; questionId: string }>();
 
-class SessionManager {
+export class SessionManager {
   private sessions = new Map<string, ActiveSession>();
   private initialized = false;
   private static readonly MAX_QUEUE_SIZE = 5;
   private messageQueue = new Map<string, { channel: TextChannel; prompt: string }[]>();
   private pendingQueuePrompts = new Map<string, { channel: TextChannel; prompt: string }>();
-  private streamState = new Map<
-    string,
-    {
-      buffer: string;
-      currentMessage: Awaited<ReturnType<TextChannel["send"]>>;
-      lastEditTime: number;
-      stopRow: ReturnType<typeof createStopButton>;
-      startedAt: number;
-      lastActivity: string;
-      toolUseCount: number;
-      heartbeat: NodeJS.Timeout;
-      hasTextOutput: boolean;
-      lastError: string | null;
-    }
-  >();
+  private streamState = new Map<string, StreamState>();
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
@@ -137,7 +137,7 @@ class SessionManager {
       if (!stream || stream.hasTextOutput) return;
       const elapsed = Math.round((Date.now() - stream.startedAt) / 1000);
       try {
-        await stream.currentMessage.edit({
+        await stream.messages.at(-1)?.edit({
           content: `⏳ ${stream.lastActivity} (${elapsed}s)`,
           components: [stream.stopRow],
         });
@@ -148,7 +148,7 @@ class SessionManager {
 
     this.streamState.set(channelId, {
       buffer: "",
-      currentMessage,
+      messages: [currentMessage],
       lastEditTime: 0,
       stopRow,
       startedAt,
@@ -228,7 +228,7 @@ class SessionManager {
         if (!stream.hasTextOutput) {
           const elapsed = Math.round((Date.now() - stream.startedAt) / 1000);
           try {
-            await stream.currentMessage.edit({
+            await stream.messages.at(-1)?.edit({
               content: `⏳ ${stream.lastActivity} (${elapsed}s) [${stream.toolUseCount} items]`,
               components: [stream.stopRow],
             });
@@ -269,7 +269,7 @@ class SessionManager {
               ? `${turn.error.message ?? "Turn failed"}\n${turn.error.additionalDetails}`
               : turn?.error?.message ?? stream?.lastError ?? "Turn failed";
           if (stream) {
-            await stream.currentMessage.edit({ content: `❌ ${message}`, components: [] }).catch(() => {});
+            await stream.messages.at(-1)?.edit({ content: `❌ ${message}`, components: [] }).catch(() => {});
           }
           updateSessionStatus(channelId, "offline");
           this.finishSession(channelId);
@@ -278,10 +278,6 @@ class SessionManager {
 
         if (stream) {
           await this.flushStream(channelId, true);
-          await stream.currentMessage.edit({
-            components: [createCompletedButton()],
-          }).catch(() => {});
-
           const durationMs = Date.now() - stream.startedAt;
           const payload: MessageCreateOptions = {
             embeds: [createResultEmbed(L("Task completed", "작업 완료"), 0, durationMs, getConfig().SHOW_COST)],
@@ -440,14 +436,24 @@ class SessionManager {
 
     const chunks = splitMessage(stream.buffer);
     try {
-      await stream.currentMessage.edit({
-        content: chunks[0] || "...",
-        components: final ? [createCompletedButton()] : [],
-      });
-      for (let i = 1; i < chunks.length; i++) {
-        stream.currentMessage = await active.channel.send(chunks[i]);
+      for (let i = 0; i < chunks.length; i++) {
+        const isLastChunk = i === chunks.length - 1;
+        const payload = {
+          content: chunks[i] || "...",
+          components: isLastChunk
+            ? final
+              ? [createCompletedButton()]
+              : [stream.stopRow]
+            : [],
+        };
+
+        const existingMessage = stream.messages[i];
+        if (existingMessage) {
+          await existingMessage.edit(payload);
+        } else {
+          stream.messages.push(await active.channel.send(payload));
+        }
       }
-      stream.buffer = "";
     } catch {
       // ignore
     }
