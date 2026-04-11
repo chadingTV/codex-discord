@@ -484,6 +484,97 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func showUpdateProgressWindow() -> (NSWindow, NSTextView) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = L("Updating Codex Discord", "Codex Discord 업데이트 중")
+        window.center()
+
+        let contentView = NSView(frame: window.contentView?.bounds ?? .zero)
+        contentView.autoresizingMask = [.width, .height]
+        window.contentView = contentView
+
+        let titleLabel = NSTextField(labelWithString: L("Update in progress...", "업데이트 진행 중..."))
+        titleLabel.font = NSFont.boldSystemFont(ofSize: 15)
+        titleLabel.frame = NSRect(x: 20, y: 438, width: 680, height: 22)
+        contentView.addSubview(titleLabel)
+
+        let descLabel = NSTextField(labelWithString: L(
+            "The log below shows each update step and command output.",
+            "아래 로그에 업데이트 단계와 명령 출력이 표시됩니다."
+        ))
+        descLabel.textColor = .secondaryLabelColor
+        descLabel.frame = NSRect(x: 20, y: 416, width: 680, height: 18)
+        contentView.addSubview(descLabel)
+
+        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 20, width: 680, height: 388))
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView(frame: scrollView.bounds)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        if #available(macOS 10.14, *) {
+            textView.backgroundColor = .textBackgroundColor
+        }
+        scrollView.documentView = textView
+        contentView.addSubview(scrollView)
+
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return (window, textView)
+    }
+
+    private func appendUpdateLog(_ textView: NSTextView, _ text: String) {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        DispatchQueue.main.async {
+            let prefix = textView.string.hasSuffix("\n") || textView.string.isEmpty ? "" : "\n"
+            textView.textStorage?.append(NSAttributedString(string: prefix + normalized))
+            if !normalized.hasSuffix("\n") {
+                textView.textStorage?.append(NSAttributedString(string: "\n"))
+            }
+            textView.scrollToEndOfDocument(nil)
+        }
+    }
+
+    @discardableResult
+    private func runShellStreaming(_ command: String, onOutput: @escaping (String) -> Void) -> Int32 {
+        let task = Process()
+        task.launchPath = "/bin/bash"
+        task.arguments = ["-c", command]
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        let handle = pipe.fileHandleForReading
+        handle.readabilityHandler = { fileHandle in
+            let data = fileHandle.availableData
+            if data.isEmpty { return }
+            if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+                onOutput(text)
+            }
+        }
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            onOutput(error.localizedDescription + "\n")
+            handle.readabilityHandler = nil
+            return -1
+        }
+
+        handle.readabilityHandler = nil
+        return task.terminationStatus
+    }
+
     @objc private func performUpdate() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -516,84 +607,207 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if alert.runModal() == .alertFirstButtonReturn {
-            let wasRunning = isRunning()
-            if wasRunning {
-                runShell("launchctl unload '\(plistDst)' 2>/dev/null")
-            }
+            let (progressWindow, logView) = showUpdateProgressWindow()
+            appendUpdateLog(logView, L("Starting update...", "업데이트를 시작합니다..."))
 
-            let hasLocalChanges = !runShell("cd '\(botDir)' && git status --porcelain 2>/dev/null")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-            if hasLocalChanges {
-                _ = runShell("cd '\(botDir)' && git stash push -u -m codex-discord-auto-update >/dev/null 2>&1")
-            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let wasRunning = self.isRunning()
+                if wasRunning {
+                    self.appendUpdateLog(logView, self.L("Stopping running bot...", "실행 중인 봇을 중지합니다..."))
+                    _ = self.runShellStreaming("launchctl unload '\(self.plistDst)' 2>/dev/null") {
+                        self.appendUpdateLog(logView, $0)
+                    }
+                }
 
-            runShell("cd '\(botDir)' && git fetch origin main --tags")
-            let pullOutput = runShell("cd '\(botDir)' && git reset --hard origin/main 2>&1")
-
-            let afterPull = runShell("cd '\(botDir)' && git rev-parse HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
-            let remote = runShell("cd '\(botDir)' && git rev-parse origin/main").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !afterPull.isEmpty && !remote.isEmpty && afterPull != remote {
+                let hasLocalChanges = !self.runShell("cd '\(self.botDir)' && git status --porcelain 2>/dev/null")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
                 if hasLocalChanges {
-                    _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")
+                    self.appendUpdateLog(logView, self.L("Stashing local changes...", "로컬 변경사항을 stash 합니다..."))
+                    _ = self.runShellStreaming("cd '\(self.botDir)' && git stash push -u -m codex-discord-auto-update 2>&1") {
+                        self.appendUpdateLog(logView, $0)
+                    }
                 }
-                let errAlert = NSAlert()
-                errAlert.messageText = L("Update Failed", "업데이트 실패")
-                errAlert.informativeText = L("git pull failed:\n", "git pull 실패:\n") + pullOutput
-                errAlert.alertStyle = .critical
-                errAlert.runModal()
+
+                self.appendUpdateLog(logView, self.L("Fetching latest changes...", "최신 변경사항을 가져옵니다..."))
+                let fetchStatus = self.runShellStreaming("cd '\(self.botDir)' && git fetch origin main --tags 2>&1") {
+                    self.appendUpdateLog(logView, $0)
+                }
+
+                self.appendUpdateLog(logView, self.L("Resetting to origin/main...", "origin/main 기준으로 맞춥니다..."))
+                let resetStatus = self.runShellStreaming("cd '\(self.botDir)' && git reset --hard origin/main 2>&1") {
+                    self.appendUpdateLog(logView, $0)
+                }
+
+                let afterPull = self.runShell("cd '\(self.botDir)' && git rev-parse HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
+                let remote = self.runShell("cd '\(self.botDir)' && git rev-parse origin/main").trimmingCharacters(in: .whitespacesAndNewlines)
+                if fetchStatus != 0 || resetStatus != 0 || (!afterPull.isEmpty && !remote.isEmpty && afterPull != remote) {
+                    if hasLocalChanges {
+                        self.appendUpdateLog(logView, self.L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."))
+                        _ = self.runShellStreaming("cd '\(self.botDir)' && git stash pop 2>&1") {
+                            self.appendUpdateLog(logView, $0)
+                        }
+                    }
+                    if wasRunning {
+                        self.generatePlist()
+                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    }
+                    DispatchQueue.main.async {
+                        let errAlert = NSAlert()
+                        errAlert.messageText = self.L("Update Failed", "업데이트 실패")
+                        errAlert.informativeText = self.L(
+                            "git sync failed. Check the update log window for details.",
+                            "git 동기화가 실패했습니다. 자세한 내용은 업데이트 로그 창을 확인하세요."
+                        )
+                        errAlert.alertStyle = .critical
+                        errAlert.runModal()
+                        progressWindow.makeKeyAndOrderFront(nil)
+                    }
+                    return
+                }
+
+                if hasLocalChanges {
+                    self.appendUpdateLog(logView, self.L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."))
+                    _ = self.runShellStreaming("cd '\(self.botDir)' && git stash pop 2>&1") {
+                        self.appendUpdateLog(logView, $0)
+                    }
+                }
+
+                self.appendUpdateLog(logView, self.L("Installing npm dependencies...", "npm 의존성을 설치합니다..."))
+                let installStatus = self.runShellStreaming("cd '\(self.botDir)' && npm install 2>&1") {
+                    self.appendUpdateLog(logView, $0)
+                }
+                if installStatus != 0 {
+                    if wasRunning {
+                        self.generatePlist()
+                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    }
+                    DispatchQueue.main.async {
+                        let errAlert = NSAlert()
+                        errAlert.messageText = self.L("Update Failed", "업데이트 실패")
+                        errAlert.informativeText = self.L(
+                            "npm install failed. Check the update log window for details.",
+                            "npm install이 실패했습니다. 자세한 내용은 업데이트 로그 창을 확인하세요."
+                        )
+                        errAlert.alertStyle = .critical
+                        errAlert.runModal()
+                        progressWindow.makeKeyAndOrderFront(nil)
+                    }
+                    return
+                }
+
+                self.appendUpdateLog(logView, self.L("Rebuilding better-sqlite3...", "better-sqlite3를 다시 빌드합니다..."))
+                let rebuildStatus = self.runShellStreaming("cd '\(self.botDir)' && npm rebuild better-sqlite3 2>&1") {
+                    self.appendUpdateLog(logView, $0)
+                }
+                if rebuildStatus != 0 {
+                    if wasRunning {
+                        self.generatePlist()
+                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    }
+                    DispatchQueue.main.async {
+                        let errAlert = NSAlert()
+                        errAlert.messageText = self.L("Update Failed", "업데이트 실패")
+                        errAlert.informativeText = self.L(
+                            "Native rebuild failed. Check the update log window for details.",
+                            "네이티브 재빌드가 실패했습니다. 자세한 내용은 업데이트 로그 창을 확인하세요."
+                        )
+                        errAlert.alertStyle = .critical
+                        errAlert.runModal()
+                        progressWindow.makeKeyAndOrderFront(nil)
+                    }
+                    return
+                }
+
+                self.appendUpdateLog(logView, self.L("Building project...", "프로젝트를 빌드합니다..."))
+                let buildStatus = self.runShellStreaming("cd '\(self.botDir)' && npm run build 2>&1") {
+                    self.appendUpdateLog(logView, $0)
+                }
+                if buildStatus != 0 {
+                    if wasRunning {
+                        self.generatePlist()
+                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    }
+                    DispatchQueue.main.async {
+                        let errAlert = NSAlert()
+                        errAlert.messageText = self.L("Update Failed", "업데이트 실패")
+                        errAlert.informativeText = self.L(
+                            "Build failed. Check the update log window for details.",
+                            "빌드가 실패했습니다. 자세한 내용은 업데이트 로그 창을 확인하세요."
+                        )
+                        errAlert.alertStyle = .critical
+                        errAlert.runModal()
+                        progressWindow.makeKeyAndOrderFront(nil)
+                    }
+                    return
+                }
+
+                self.currentVersion = self.getVersion()
+                self.updateAvailable = false
+                self.appendUpdateLog(logView, self.L("Updated to version: ", "업데이트된 버전: ") + self.currentVersion)
+
+                let swiftSrc = "\(self.botDir)/menubar/CodexBotMenu.swift"
+                let swiftBin = "\(self.botDir)/menubar/CodexBotMenu"
+                if FileManager.default.fileExists(atPath: swiftSrc) {
+                    self.appendUpdateLog(logView, self.L("Rebuilding menu bar app...", "메뉴바 앱을 다시 빌드합니다..."))
+                    let xcrunCheck = self.runShell("xcrun --find swiftc 2>&1")
+                    if xcrunCheck.contains("license") || xcrunCheck.contains("error") {
+                        self.appendUpdateLog(logView, self.L("Requesting Xcode license approval...", "Xcode 라이선스 승인을 요청합니다..."))
+                        _ = self.runShell("osascript -e 'do shell script \"xcodebuild -license accept\" with administrator privileges' 2>/dev/null")
+                    }
+
+                    let swiftStatus = self.runShellStreaming("swiftc -o '\(swiftBin)' '\(swiftSrc)' -framework Cocoa 2>&1") {
+                        self.appendUpdateLog(logView, $0)
+                    }
+                    if swiftStatus != 0 {
+                        if wasRunning {
+                            self.generatePlist()
+                            _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        }
+                        DispatchQueue.main.async {
+                            let errAlert = NSAlert()
+                            errAlert.messageText = self.L("Update Failed", "업데이트 실패")
+                            errAlert.informativeText = self.L(
+                                "Menu bar app rebuild failed. Check the update log window for details.",
+                                "메뉴바 앱 재빌드가 실패했습니다. 자세한 내용은 업데이트 로그 창을 확인하세요."
+                            )
+                            errAlert.alertStyle = .critical
+                            errAlert.runModal()
+                            progressWindow.makeKeyAndOrderFront(nil)
+                        }
+                        return
+                    }
+
+                    if wasRunning {
+                        self.generatePlist()
+                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    }
+
+                    self.appendUpdateLog(logView, self.L("Restarting menu bar app...", "메뉴바 앱을 재시작합니다..."))
+                    _ = self.runShell("nohup bash -c 'sleep 1 && \"\(swiftBin)\"' > /dev/null 2>&1 &")
+                    DispatchQueue.main.async {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    return
+                }
+
                 if wasRunning {
-                    generatePlist()
-                    runShell("launchctl load '\(plistDst)'")
-                }
-                return
-            }
-
-            let output = runShell("cd '\(botDir)' && npm install && npm rebuild better-sqlite3 && npm run build 2>&1")
-
-            if hasLocalChanges {
-                _ = runShell("cd '\(botDir)' && git stash pop >/dev/null 2>&1")
-            }
-
-            currentVersion = getVersion()
-            updateAvailable = false
-
-            // Rebuild the menu bar app itself and restart
-            let swiftSrc = "\(botDir)/menubar/CodexBotMenu.swift"
-            let swiftBin = "\(botDir)/menubar/CodexBotMenu"
-            if FileManager.default.fileExists(atPath: swiftSrc) {
-                // Accept Xcode license if needed before compiling
-                let xcrunCheck = runShell("xcrun --find swiftc 2>&1")
-                if xcrunCheck.contains("license") || xcrunCheck.contains("error") {
-                    runShell("osascript -e 'do shell script \"xcodebuild -license accept\" with administrator privileges' 2>/dev/null")
-                }
-                runShell("swiftc -o '\(swiftBin)' '\(swiftSrc)' -framework Cocoa 2>&1")
-
-                if wasRunning {
-                    generatePlist()
-                    runShell("launchctl load '\(plistDst)'")
+                    self.generatePlist()
+                    _ = self.runShell("launchctl load '\(self.plistDst)'")
                 }
 
-                // Restart menu bar app (detached from terminal)
-                runShell("nohup bash -c 'sleep 1 && \"\(swiftBin)\"' > /dev/null 2>&1 &")
+                DispatchQueue.main.async {
+                    progressWindow.close()
+                    let doneAlert = NSAlert()
+                    doneAlert.messageText = self.L("Update Complete", "업데이트 완료")
+                    doneAlert.informativeText = self.L("Updated to version: ", "업데이트된 버전: ") + self.currentVersion
+                    doneAlert.alertStyle = .informational
+                    doneAlert.runModal()
 
-                NSApplication.shared.terminate(nil)
-                return
+                    self.updateStatus()
+                    self.buildMenu()
+                }
             }
-
-            if wasRunning {
-                generatePlist()
-                runShell("launchctl load '\(plistDst)'")
-            }
-
-            let doneAlert = NSAlert()
-            doneAlert.messageText = L("Update Complete", "업데이트 완료")
-            doneAlert.informativeText = L("Updated to version: ", "업데이트된 버전: ") + currentVersion + "\n\n" + output
-            doneAlert.alertStyle = .informational
-            doneAlert.runModal()
-
-            updateStatus()
-            buildMenu()
         }
     }
 

@@ -287,72 +287,205 @@ def _show_update_confirmation():
     return True
 
 
+def _run_logged_command(command, append_log, cwd=BOT_DIR):
+    append_log("$ " + " ".join(command))
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output_lines = []
+    try:
+        if proc.stdout:
+            for line in proc.stdout:
+                clean = line.rstrip()
+                output_lines.append(clean)
+                if clean:
+                    append_log(clean)
+    finally:
+        code = proc.wait()
+    return code, "\n".join(output_lines).strip()
+
+
 def perform_update(icon, item):
     global update_available, current_version
     if not _show_update_confirmation():
         return
-
-    # Stop bot before update
-    subprocess.run(["systemctl", "--user", "stop", SERVICE_NAME], capture_output=True)
-    time.sleep(1)
-
-    stashed = False
-    if repo_has_local_changes():
-        subprocess.run(["git", "stash", "push", "-u", "-m", "codex-discord-auto-update"], cwd=BOT_DIR, capture_output=True)
-        stashed = True
-
-    subprocess.run(["git", "fetch", "origin", "main", "--tags"], capture_output=True, cwd=BOT_DIR)
-    pull_result = subprocess.run(
-        ["git", "reset", "--hard", "origin/main"],
-        capture_output=True,
-        text=True,
-        cwd=BOT_DIR,
-    )
-
-    if pull_result.returncode != 0:
-        err_msg = pull_result.stderr.strip() or pull_result.stdout.strip() or "Unknown error"
-        if stashed:
-            subprocess.run(["git", "stash", "pop"], cwd=BOT_DIR, capture_output=True)
-        icon.notify(L("Update failed (git pull): ", "업데이트 실패 (git pull): ") + err_msg,
-                    L("Update Failed", "업데이트 실패"))
-        subprocess.run(["systemctl", "--user", "start", SERVICE_NAME], capture_output=True)
-        update_icon(icon)
-        return
-
-    if stashed:
-        subprocess.run(["git", "stash", "pop"], cwd=BOT_DIR, capture_output=True)
-    install_result = subprocess.run(["npm", "install"], capture_output=True, text=True, cwd=BOT_DIR)
-    subprocess.run(["npm", "rebuild", "better-sqlite3"], capture_output=True, cwd=BOT_DIR)
-    build_result = subprocess.run(["npm", "run", "build"], capture_output=True, text=True, cwd=BOT_DIR)
-
-    if install_result.returncode != 0 or build_result.returncode != 0:
-        failing_result = install_result if install_result.returncode != 0 else build_result
-        failed_step = "install" if install_result.returncode != 0 else "build"
-        err_msg = failing_result.stderr.strip() or failing_result.stdout.strip() or "Unknown error"
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk, GLib, Pango
+    except Exception:
         icon.notify(
-            L(f"Update failed ({failed_step}): ", f"업데이트 실패 ({'설치' if failed_step == 'install' else '빌드'}): ") + err_msg[:200],
-            L("Update Failed", "업데이트 실패"),
+            L("GTK is unavailable, so update logs cannot be shown.", "GTK를 사용할 수 없어 업데이트 로그를 표시할 수 없습니다."),
+            L("Update", "업데이트"),
         )
-        subprocess.run(["systemctl", "--user", "start", SERVICE_NAME], capture_output=True)
-        update_icon(icon)
         return
 
-    # Regenerate systemd service file (node path may change)
-    start_script = os.path.join(BOT_DIR, "linux-start.sh")
-    subprocess.run(["/bin/bash", start_script, "--regen-service"], capture_output=True)
+    win = Gtk.Window(title=L("Updating Codex Discord", "Codex Discord 업데이트 중"))
+    win.set_default_size(720, 460)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.set_border_width(12)
+    win.set_resizable(True)
 
-    current_version = get_version()
-    update_available = False
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    win.add(outer)
 
-    # Always restart bot after update
-    subprocess.run(["systemctl", "--user", "enable", SERVICE_NAME], capture_output=True)
-    subprocess.run(["systemctl", "--user", "start", SERVICE_NAME], capture_output=True)
+    title_label = Gtk.Label()
+    title_label.set_markup("<b>" + L("Update in progress...", "업데이트 진행 중...") + "</b>")
+    title_label.set_halign(Gtk.Align.START)
+    outer.pack_start(title_label, False, False, 0)
 
-    time.sleep(2)
-    update_icon(icon)
-    icon.menu = create_menu()
-    icon.notify(L("Updated to version: ", "업데이트 완료: ") + current_version,
-                L("Update Complete", "업데이트 완료"))
+    desc_label = Gtk.Label(label=L(
+        "The log below shows each update step and command output.",
+        "아래 로그에 업데이트 단계와 명령 출력이 표시됩니다.",
+    ))
+    desc_label.set_halign(Gtk.Align.START)
+    desc_label.modify_font(Pango.FontDescription.from_string("9"))
+    outer.pack_start(desc_label, False, False, 0)
+
+    scroller = Gtk.ScrolledWindow()
+    scroller.set_hexpand(True)
+    scroller.set_vexpand(True)
+    outer.pack_start(scroller, True, True, 0)
+
+    text_view = Gtk.TextView()
+    text_view.set_editable(False)
+    text_view.set_cursor_visible(False)
+    text_view.set_monospace(True)
+    text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+    scroller.add(text_view)
+    text_buffer = text_view.get_buffer()
+
+    progress = Gtk.ProgressBar()
+    progress.set_show_text(False)
+    outer.pack_start(progress, False, False, 0)
+
+    close_btn = Gtk.Button(label=L("Close", "닫기"))
+    close_btn.set_sensitive(False)
+    close_btn.connect("clicked", lambda _b: win.destroy())
+    outer.pack_start(close_btn, False, False, 0)
+
+    running = {"value": True}
+
+    def append_log(text):
+        def _append():
+            end_iter = text_buffer.get_end_iter()
+            text_buffer.insert(end_iter, text.rstrip() + "\n")
+            mark = text_buffer.create_mark(None, text_buffer.get_end_iter(), False)
+            text_view.scroll_mark_onscreen(mark)
+            return False
+        GLib.idle_add(_append)
+
+    def finish(success, message):
+        def _finish():
+            running["value"] = False
+            close_btn.set_sensitive(True)
+            progress.set_fraction(1.0 if success else 0.0)
+            title_label.set_markup("<b>" + message + "</b>")
+            update_icon(icon)
+            icon.menu = create_menu()
+            return False
+        GLib.idle_add(_finish)
+
+    def pulse():
+        if not running["value"]:
+            return False
+        progress.pulse()
+        return True
+
+    GLib.timeout_add(120, pulse)
+    win.show_all()
+
+    def worker():
+        global update_available, current_version
+        append_log(L("Starting update...", "업데이트를 시작합니다..."))
+
+        was_running = is_running()
+        if was_running:
+            append_log(L("Stopping running bot...", "실행 중인 봇을 중지합니다..."))
+            _run_logged_command(["systemctl", "--user", "stop", SERVICE_NAME], append_log)
+            time.sleep(1)
+
+        stashed = False
+        if repo_has_local_changes():
+            append_log(L("Stashing local changes...", "로컬 변경사항을 stash 합니다..."))
+            _run_logged_command(["git", "stash", "push", "-u", "-m", "codex-discord-auto-update"], append_log)
+            stashed = True
+
+        append_log(L("Fetching latest changes...", "최신 변경사항을 가져옵니다..."))
+        fetch_code, _ = _run_logged_command(["git", "fetch", "origin", "main", "--tags"], append_log)
+        append_log(L("Resetting to origin/main...", "origin/main 기준으로 맞춥니다..."))
+        reset_code, reset_output = _run_logged_command(["git", "reset", "--hard", "origin/main"], append_log)
+
+        if fetch_code != 0 or reset_code != 0:
+            if stashed:
+                append_log(L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."))
+                _run_logged_command(["git", "stash", "pop"], append_log)
+            if was_running:
+                _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
+            icon.notify(
+                L("Update failed during git sync.", "git 동기화 중 업데이트가 실패했습니다."),
+                L("Update Failed", "업데이트 실패"),
+            )
+            finish(False, L("Update failed", "업데이트 실패"))
+            return
+
+        if stashed:
+            append_log(L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."))
+            _run_logged_command(["git", "stash", "pop"], append_log)
+
+        append_log(L("Installing npm dependencies...", "npm 의존성을 설치합니다..."))
+        install_code, _ = _run_logged_command(["npm", "install"], append_log)
+        if install_code != 0:
+            if was_running:
+                _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
+            icon.notify(L("Update failed during npm install.", "npm install 중 업데이트가 실패했습니다."),
+                        L("Update Failed", "업데이트 실패"))
+            finish(False, L("Update failed", "업데이트 실패"))
+            return
+
+        append_log(L("Rebuilding better-sqlite3...", "better-sqlite3를 다시 빌드합니다..."))
+        rebuild_code, _ = _run_logged_command(["npm", "rebuild", "better-sqlite3"], append_log)
+        if rebuild_code != 0:
+            if was_running:
+                _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
+            icon.notify(L("Update failed during native rebuild.", "네이티브 재빌드 중 업데이트가 실패했습니다."),
+                        L("Update Failed", "업데이트 실패"))
+            finish(False, L("Update failed", "업데이트 실패"))
+            return
+
+        append_log(L("Building project...", "프로젝트를 빌드합니다..."))
+        build_code, _ = _run_logged_command(["npm", "run", "build"], append_log)
+        if build_code != 0:
+            if was_running:
+                _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
+            icon.notify(L("Update failed during build.", "빌드 중 업데이트가 실패했습니다."),
+                        L("Update Failed", "업데이트 실패"))
+            finish(False, L("Update failed", "업데이트 실패"))
+            return
+
+        append_log(L("Refreshing systemd service...", "systemd 서비스를 새로 고칩니다..."))
+        start_script = os.path.join(BOT_DIR, "linux-start.sh")
+        _run_logged_command(["/bin/bash", start_script, "--regen-service"], append_log)
+
+        current_version = get_version()
+        update_available = False
+        append_log(L("Updated to version: ", "업데이트된 버전: ") + current_version)
+
+        append_log(L("Restarting bot service...", "봇 서비스를 재시작합니다..."))
+        _run_logged_command(["systemctl", "--user", "enable", SERVICE_NAME], append_log)
+        _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
+
+        time.sleep(2)
+        icon.notify(L("Updated to version: ", "업데이트 완료: ") + current_version,
+                    L("Update Complete", "업데이트 완료"))
+        finish(True, L("Update complete", "업데이트 완료"))
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def create_icon(color):

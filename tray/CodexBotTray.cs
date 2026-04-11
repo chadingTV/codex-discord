@@ -801,6 +801,94 @@ class CodexBotTray : Form
         return dialogResult;
     }
 
+    private Form ShowUpdateProgressWindow(out TextBox logBox)
+    {
+        var form = new Form()
+        {
+            Text = L("Updating Codex Discord", "Codex Discord 업데이트 중"),
+            Width = 620,
+            Height = 460,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            BackColor = Color.FromArgb(30, 30, 30),
+            ForeColor = Color.White,
+        };
+        int val = 1;
+        DwmSetWindowAttribute(form.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref val, sizeof(int));
+
+        var titleLabel = new Label()
+        {
+            Text = L("Update in progress...", "업데이트 진행 중..."),
+            Left = 20, Top = 16, Width = 560, Height = 24,
+            Font = new Font(FontFamily.GenericSansSerif, 12, FontStyle.Bold),
+            ForeColor = Color.White, BackColor = Color.Transparent
+        };
+        form.Controls.Add(titleLabel);
+
+        var descLabel = new Label()
+        {
+            Text = L("The log below shows each update step and command output.", "아래 로그에 업데이트 단계와 명령 출력이 표시됩니다."),
+            Left = 20, Top = 44, Width = 560, Height = 20,
+            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            Font = new Font(FontFamily.GenericSansSerif, 9)
+        };
+        form.Controls.Add(descLabel);
+
+        logBox = new TextBox()
+        {
+            Left = 20, Top = 74, Width = 560, Height = 330,
+            Multiline = true, ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White,
+            Font = new Font("Consolas", 9),
+            BorderStyle = BorderStyle.None,
+        };
+        form.Controls.Add(logBox);
+
+        form.Show();
+        form.BringToFront();
+        Application.DoEvents();
+        return form;
+    }
+
+    private void AppendUpdateLog(TextBox logBox, string text)
+    {
+        if (logBox == null || string.IsNullOrEmpty(text)) return;
+        logBox.AppendText(text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
+        if (!text.EndsWith("\n")) logBox.AppendText(Environment.NewLine);
+        logBox.SelectionStart = logBox.TextLength;
+        logBox.ScrollToCaret();
+        Application.DoEvents();
+    }
+
+    private string RunCmdCombined(string fileName, string arguments, out int exitCode)
+    {
+        exitCode = -1;
+        try
+        {
+            var proc = new Process();
+            proc.StartInfo.FileName = fileName;
+            proc.StartInfo.Arguments = arguments;
+            proc.StartInfo.UseShellExecute = false;
+            proc.StartInfo.RedirectStandardOutput = true;
+            proc.StartInfo.RedirectStandardError = true;
+            proc.StartInfo.CreateNoWindow = true;
+            proc.StartInfo.WorkingDirectory = botDir;
+            proc.Start();
+            string output = proc.StandardOutput.ReadToEnd();
+            string error = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            exitCode = proc.ExitCode;
+            return (output + error).Trim();
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
     private void PerformUpdate(object sender, EventArgs e)
     {
         DialogResult result;
@@ -820,9 +908,14 @@ class CodexBotTray : Form
 
         if (result != DialogResult.Yes) return;
 
+        TextBox logBox;
+        Form progressForm = ShowUpdateProgressWindow(out logBox);
+        AppendUpdateLog(logBox, L("Starting update...", "업데이트를 시작합니다..."));
+
         bool wasRunning = IsRunning();
         if (wasRunning)
         {
+            AppendUpdateLog(logBox, L("Stopping running bot...", "실행 중인 봇을 중지합니다..."));
             KillBot();
             Thread.Sleep(2000);
         }
@@ -831,18 +924,98 @@ class CodexBotTray : Form
             RunCmdOutput("git", "-C \"" + botDir + "\" status --porcelain"));
         if (hasLocalChanges)
         {
-            RunCmdOutput("git", "-C \"" + botDir + "\" stash push -u -m \"codex-discord-auto-update\"");
+            AppendUpdateLog(logBox, L("Stashing local changes...", "로컬 변경사항을 stash 합니다..."));
+            int stashCode;
+            string stashOutput = RunCmdCombined("git", "-C \"" + botDir + "\" stash push -u -m \"codex-discord-auto-update\"", out stashCode);
+            if (!string.IsNullOrWhiteSpace(stashOutput)) AppendUpdateLog(logBox, stashOutput);
         }
 
-        RunCmdOutput("git", "-C \"" + botDir + "\" pull origin main --tags");
+        AppendUpdateLog(logBox, L("Fetching latest changes...", "최신 변경사항을 가져옵니다..."));
+        int fetchCode;
+        string fetchOutput = RunCmdCombined("git", "-C \"" + botDir + "\" fetch origin main --tags", out fetchCode);
+        if (!string.IsNullOrWhiteSpace(fetchOutput)) AppendUpdateLog(logBox, fetchOutput);
+
+        AppendUpdateLog(logBox, L("Resetting to origin/main...", "origin/main 기준으로 맞춥니다..."));
+        int resetCode;
+        string pullOutput = RunCmdCombined("git", "-C \"" + botDir + "\" reset --hard origin/main", out resetCode);
+        if (!string.IsNullOrWhiteSpace(pullOutput)) AppendUpdateLog(logBox, pullOutput);
+
+        string afterPull = RunCmdOutput("git", "-C \"" + botDir + "\" rev-parse HEAD").Trim();
+        string remote = RunCmdOutput("git", "-C \"" + botDir + "\" rev-parse origin/main").Trim();
+        if (resetCode != 0 || (!string.IsNullOrEmpty(afterPull) && !string.IsNullOrEmpty(remote) && afterPull != remote))
+        {
+            if (hasLocalChanges)
+            {
+                AppendUpdateLog(logBox, L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."));
+                int popCode;
+                string popOutput = RunCmdCombined("git", "-C \"" + botDir + "\" stash pop", out popCode);
+                if (!string.IsNullOrWhiteSpace(popOutput)) AppendUpdateLog(logBox, popOutput);
+            }
+            progressForm.Close();
+            MessageBox.Show(
+                L("Update failed. git reset failed:\n", "업데이트 실패. git reset이 실패했습니다:\n") + pullOutput,
+                L("Update Failed", "업데이트 실패"),
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (wasRunning) StartBot(null, null);
+            return;
+        }
+
         if (hasLocalChanges)
         {
-            RunCmdOutput("git", "-C \"" + botDir + "\" stash pop");
+            AppendUpdateLog(logBox, L("Restoring stashed changes...", "stash 변경사항을 복원합니다..."));
+            int popCode;
+            string popOutput = RunCmdCombined("git", "-C \"" + botDir + "\" stash pop", out popCode);
+            if (!string.IsNullOrWhiteSpace(popOutput)) AppendUpdateLog(logBox, popOutput);
         }
-        RunCmd("cd /d \"" + botDir + "\" && npm install && npm rebuild better-sqlite3 && npm run build", true);
+
+        AppendUpdateLog(logBox, L("Installing npm dependencies...", "npm 의존성을 설치합니다..."));
+        int installCode;
+        string installOutput = RunCmdCombined("cmd.exe", "/c cd /d \"" + botDir + "\" && npm install", out installCode);
+        if (!string.IsNullOrWhiteSpace(installOutput)) AppendUpdateLog(logBox, installOutput);
+        if (installCode != 0)
+        {
+            progressForm.Close();
+            MessageBox.Show(
+                L("Update failed during npm install.", "npm install 중 업데이트가 실패했습니다."),
+                L("Update Failed", "업데이트 실패"),
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (wasRunning) StartBot(null, null);
+            return;
+        }
+
+        AppendUpdateLog(logBox, L("Rebuilding better-sqlite3...", "better-sqlite3를 다시 빌드합니다..."));
+        int rebuildCode;
+        string rebuildOutput = RunCmdCombined("cmd.exe", "/c cd /d \"" + botDir + "\" && npm rebuild better-sqlite3", out rebuildCode);
+        if (!string.IsNullOrWhiteSpace(rebuildOutput)) AppendUpdateLog(logBox, rebuildOutput);
+        if (rebuildCode != 0)
+        {
+            progressForm.Close();
+            MessageBox.Show(
+                L("Update failed during native module rebuild.", "네이티브 모듈 재빌드 중 업데이트가 실패했습니다."),
+                L("Update Failed", "업데이트 실패"),
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (wasRunning) StartBot(null, null);
+            return;
+        }
+
+        AppendUpdateLog(logBox, L("Building project...", "프로젝트를 빌드합니다..."));
+        int buildCode;
+        string buildOutput = RunCmdCombined("cmd.exe", "/c cd /d \"" + botDir + "\" && npm run build", out buildCode);
+        if (!string.IsNullOrWhiteSpace(buildOutput)) AppendUpdateLog(logBox, buildOutput);
+        if (buildCode != 0)
+        {
+            progressForm.Close();
+            MessageBox.Show(
+                L("Update failed during build.", "빌드 중 업데이트가 실패했습니다."),
+                L("Update Failed", "업데이트 실패"),
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (wasRunning) StartBot(null, null);
+            return;
+        }
 
         currentVersion = GetVersion();
         updateAvailable = false;
+        AppendUpdateLog(logBox, L("Updated to version: ", "업데이트된 버전: ") + currentVersion);
 
         // Tray exe 재컴파일 및 재시작
         // 실행 중인 자기 자신은 삭제 불가하므로 bat 스크립트로 대기 후 교체
@@ -853,6 +1026,8 @@ class CodexBotTray : Form
         if (File.Exists(traySrc))
         {
             string updateLog = Path.Combine(botDir, "update.log");
+            AppendUpdateLog(logBox, L("Preparing tray restart script...", "트레이 재시작 스크립트를 준비합니다..."));
+            AppendUpdateLog(logBox, L("Remaining tray compile/restart log will be written to: ", "남은 트레이 컴파일/재시작 로그 위치: ") + updateLog);
             string batContent =
                 "@echo off\r\n" +
                 "setlocal enabledelayedexpansion\r\n" +
@@ -894,6 +1069,7 @@ class CodexBotTray : Form
             Process.Start(psi);
 
             // 자기 자신 종료 (bat이 대기 후 처리)
+            AppendUpdateLog(logBox, L("Restarting tray app...", "트레이 앱을 재시작합니다..."));
             trayIcon.Visible = false;
             Application.Exit();
             return;
@@ -905,6 +1081,7 @@ class CodexBotTray : Form
             StartBot(null, null);
         }
 
+        progressForm.Close();
         MessageBox.Show(L("Updated to version: ", "업데이트 완료: ") + currentVersion,
             L("Update Complete", "업데이트 완료"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         UpdateStatus();
