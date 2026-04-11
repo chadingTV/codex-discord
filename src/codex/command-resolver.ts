@@ -39,20 +39,55 @@ function commandWorks(command: string): boolean {
   }
 }
 
-export function resolveCodexCommand(): string {
-  if (process.platform !== "win32") return "codex";
+function uniqueCandidates(candidates: Array<string | undefined | null>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    resolved.push(trimmed);
+  }
+  return resolved;
+}
 
+function unixCandidates(): string[] {
+  const home = os.homedir();
+  const pathEntries = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean);
+
+  return uniqueCandidates([
+    process.env.CODEX_BIN,
+    "codex",
+    ...pathEntries.map((entry) => path.join(entry, "codex")),
+    path.join(home, ".npm-global", "bin", "codex"),
+    path.join(home, ".local", "bin", "codex"),
+    path.join(home, ".volta", "bin", "codex"),
+    path.join(home, ".yarn", "bin", "codex"),
+    path.join(home, ".config", "yarn", "global", "node_modules", ".bin", "codex"),
+    "/usr/local/bin/codex",
+    "/usr/bin/codex",
+    "/opt/homebrew/bin/codex",
+  ]);
+}
+
+export function resolveCodexCommand(): string {
   const cache = loadCache();
   if (cache.codexCommand && commandWorks(cache.codexCommand)) {
     return cache.codexCommand;
   }
 
-  const candidates = ["codex.cmd", "codex.exe", "codex"];
+  const candidates = process.platform === "win32"
+    ? ["codex.cmd", "codex.exe", "codex"]
+    : unixCandidates();
+
   for (const candidate of candidates) {
     if (!commandWorks(candidate)) continue;
     saveCache({ ...cache, codexCommand: candidate });
     return candidate;
   }
 
-  return "codex.cmd";
+  return process.platform === "win32" ? "codex.cmd" : "codex";
 }

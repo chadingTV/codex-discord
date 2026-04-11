@@ -69,6 +69,21 @@ if [ -z "$NODE_BIN" ]; then
     exit 1
 fi
 
+find_codex() {
+    # PATH first
+    which codex 2>/dev/null && return
+    # common global install locations
+    [ -x "$HOME/.npm-global/bin/codex" ] && echo "$HOME/.npm-global/bin/codex" && return
+    [ -x "$HOME/.local/bin/codex" ] && echo "$HOME/.local/bin/codex" && return
+    [ -x "$HOME/.volta/bin/codex" ] && echo "$HOME/.volta/bin/codex" && return
+}
+
+CODEX_BIN=$(find_codex)
+CODEX_DIR=""
+if [ -n "$CODEX_BIN" ]; then
+    CODEX_DIR="$(dirname "$CODEX_BIN")"
+fi
+
 check_native_modules() {
     local sqlite_node="$SCRIPT_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
     if [ -f "$sqlite_node" ]; then
@@ -101,7 +116,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
 Environment=HOME=$HOME
-Environment=PATH=$(dirname "$NODE_BIN"):$PATH
+Environment=PATH=$(dirname "$NODE_BIN")${CODEX_DIR:+:$CODEX_DIR}:$PATH
 Environment=NODE_PATH=$(dirname "$NODE_BIN")
 ExecStartPre=/bin/bash -c 'touch $SCRIPT_DIR/.bot.lock'
 ExecStart=$NODE_BIN $SCRIPT_DIR/dist/index.js
@@ -202,7 +217,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
 Environment=HOME=$HOME
-Environment=PATH=$(dirname "$NODE_BIN"):$PATH
+Environment=PATH=$(dirname "$NODE_BIN")${CODEX_DIR:+:$CODEX_DIR}:$PATH
 Environment=NODE_PATH=$(dirname "$NODE_BIN")
 ExecStartPre=/bin/bash -c 'touch $SCRIPT_DIR/.bot.lock'
 ExecStart=$NODE_BIN $SCRIPT_DIR/dist/index.js
