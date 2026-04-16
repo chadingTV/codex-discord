@@ -408,6 +408,30 @@ def perform_update(icon, item):
             return False
         GLib.idle_add(_finish)
 
+    def restart_tray():
+        tray_script = os.path.abspath(__file__)
+
+        def _restart():
+            running["value"] = False
+            title_label.set_markup("<b>" + L("Update complete. Restarting tray...", "업데이트 완료. 트레이를 다시 시작합니다...") + "</b>")
+            progress.set_fraction(1.0)
+            close_btn.set_sensitive(False)
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            subprocess.Popen(
+                [sys.executable, tray_script],
+                cwd=BOT_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            icon.stop()
+            return False
+
+        GLib.idle_add(_restart)
+
     def pulse():
         if not running["value"]:
             return False
@@ -498,9 +522,8 @@ def perform_update(icon, item):
         _run_logged_command(["systemctl", "--user", "start", SERVICE_NAME], append_log)
 
         time.sleep(2)
-        icon.notify(L("Updated to version: ", "업데이트 완료: ") + current_version,
-                    L("Update Complete", "업데이트 완료"))
-        finish(True, L("Update complete", "업데이트 완료"))
+        append_log(L("Restarting tray...", "트레이를 다시 시작합니다..."))
+        restart_tray()
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -1647,7 +1670,17 @@ def ensure_single_instance():
 
     # Cleanup PID file on exit
     import atexit
-    atexit.register(lambda: os.remove(pid_file) if os.path.exists(pid_file) else None)
+
+    def cleanup_pid_file():
+        try:
+            if os.path.exists(pid_file):
+                with open(pid_file) as f:
+                    if f.read().strip() == str(my_pid):
+                        os.remove(pid_file)
+        except Exception:
+            pass
+
+    atexit.register(cleanup_pid_file)
 
 
 if __name__ == "__main__":
