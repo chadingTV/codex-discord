@@ -57,6 +57,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cachedNewVersion: String = ""
     private var usageData: CodexUsageData?
     private var usageLastFetched: Date?
+    private var launchdDomain: String {
+        "gui/\(getuid())"
+    }
 
     override init() {
         let scriptDir = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
@@ -122,6 +125,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.updateStatus()
             self?.buildMenu()
+            self?.rebuildControlPanel()
         }
         // Check for updates every 5 hours
         Timer.scheduledTimer(withTimeInterval: 18000, repeats: true) { [weak self] _ in
@@ -138,6 +142,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     self.openSettings()
                 }
+            } else if !self.isRunning() {
+                self.startBot()
             }
         }
     }
@@ -631,7 +637,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let wasRunning = self.isRunning()
                 if wasRunning {
                     self.appendUpdateLog(logView, self.L("Stopping running bot...", "실행 중인 봇을 중지합니다..."))
-                    _ = self.runShellStreaming("launchctl unload '\(self.plistDst)' 2>/dev/null") {
+                    _ = self.runShellStreaming(self.stopLaunchAgentCommand(label: self.label, plistPath: self.plistDst)) {
                         self.appendUpdateLog(logView, $0)
                     }
                 }
@@ -667,7 +673,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     if wasRunning {
                         self.generatePlist()
-                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        _ = self.startLaunchAgent(plistPath: self.plistDst)
                     }
                     DispatchQueue.main.async {
                         let errAlert = NSAlert()
@@ -697,7 +703,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if installStatus != 0 {
                     if wasRunning {
                         self.generatePlist()
-                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        _ = self.startLaunchAgent(plistPath: self.plistDst)
                     }
                     DispatchQueue.main.async {
                         let errAlert = NSAlert()
@@ -720,7 +726,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if rebuildStatus != 0 {
                     if wasRunning {
                         self.generatePlist()
-                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        _ = self.startLaunchAgent(plistPath: self.plistDst)
                     }
                     DispatchQueue.main.async {
                         let errAlert = NSAlert()
@@ -743,7 +749,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if buildStatus != 0 {
                     if wasRunning {
                         self.generatePlist()
-                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        _ = self.startLaunchAgent(plistPath: self.plistDst)
                     }
                     DispatchQueue.main.async {
                         let errAlert = NSAlert()
@@ -779,7 +785,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     if swiftStatus != 0 {
                         if wasRunning {
                             self.generatePlist()
-                            _ = self.runShell("launchctl load '\(self.plistDst)'")
+                            _ = self.startLaunchAgent(plistPath: self.plistDst)
                         }
                         DispatchQueue.main.async {
                             let errAlert = NSAlert()
@@ -797,7 +803,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                     if wasRunning {
                         self.generatePlist()
-                        _ = self.runShell("launchctl load '\(self.plistDst)'")
+                        _ = self.startLaunchAgent(plistPath: self.plistDst)
                     }
 
                     self.appendUpdateLog(logView, self.L("Restarting menu bar app...", "메뉴바 앱을 재시작합니다..."))
@@ -810,7 +816,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
                 if wasRunning {
                     self.generatePlist()
-                    _ = self.runShell("launchctl load '\(self.plistDst)'")
+                    _ = self.startLaunchAgent(plistPath: self.plistDst)
                 }
 
                 DispatchQueue.main.async {
@@ -1729,11 +1735,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             updateStatus()
             buildMenu()
             rebuildControlPanel()
-
-            // Auto-start bot if not running and env is configured
-            if !isRunning() && isEnvConfigured() {
-                startBot()
-            }
         }
     }
 
@@ -1765,13 +1766,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleAutoStart() {
         if isAutoStartEnabled() {
             // Disable: remove menubar autostart plist
-            runShell("launchctl unload '\(menubarPlistDst)' 2>/dev/null")
+            stopLaunchAgent(label: menubarLabel, plistPath: menubarPlistDst)
             try? FileManager.default.removeItem(atPath: menubarPlistDst)
         } else {
             // Enable: register menubar app to launch on login
-            // (menubar app auto-starts bot when it launches)
             generateMenubarPlist()
-            runShell("launchctl load '\(menubarPlistDst)'")
+            startLaunchAgent(plistPath: menubarPlistDst)
         }
         buildMenu()
         rebuildControlPanel()
@@ -1829,7 +1829,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             <key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
-            <true/>
+            <false/>
             <key>ThrottleInterval</key>
             <integer>10</integer>
             <key>StandardOutPath</key>
@@ -1850,9 +1850,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Bot Controls
 
     @objc private func startBot() {
-        runShell("launchctl unload '\(plistDst)' 2>/dev/null")
+        stopLaunchAgent(label: label, plistPath: plistDst)
         generatePlist()
-        runShell("launchctl load '\(plistDst)'")
+        startLaunchAgent(plistPath: plistDst)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.updateStatus()
             self.buildMenu()
@@ -1861,8 +1861,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func stopBot() {
-        runShell("launchctl unload '\(plistDst)' 2>/dev/null")
-        runShell("pkill -f 'dist/index.js' 2>/dev/null")
+        stopLaunchAgent(label: label, plistPath: plistDst)
+        killBotProcesses()
         try? FileManager.default.removeItem(atPath: botDir + "/.bot.lock")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             self.updateStatus()
@@ -1872,12 +1872,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartBot() {
-        runShell("launchctl unload '\(plistDst)' 2>/dev/null")
-        runShell("pkill -f 'dist/index.js' 2>/dev/null")
+        stopLaunchAgent(label: label, plistPath: plistDst)
+        killBotProcesses()
         try? FileManager.default.removeItem(atPath: botDir + "/.bot.lock")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             self.generatePlist()
-            self.runShell("launchctl load '\(self.plistDst)'")
+            self.startLaunchAgent(plistPath: self.plistDst)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.updateStatus()
                 self.buildMenu()
@@ -1902,9 +1902,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitAll() {
         if isRunning() {
-            runShell("launchctl unload '\(plistDst)' 2>/dev/null")
+            stopLaunchAgent(label: label, plistPath: plistDst)
         }
         NSApplication.shared.terminate(nil)
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    @discardableResult
+    private func stopLaunchAgent(label: String, plistPath: String) -> String {
+        runShell(stopLaunchAgentCommand(label: label, plistPath: plistPath))
+    }
+
+    private func stopLaunchAgentCommand(label: String, plistPath: String) -> String {
+        let domainLabel = shellQuote("\(launchdDomain)/\(label)")
+        let plist = shellQuote(plistPath)
+        return "launchctl bootout \(domainLabel) 2>/dev/null || launchctl unload \(plist) 2>/dev/null"
+    }
+
+    @discardableResult
+    private func startLaunchAgent(plistPath: String) -> String {
+        let domain = shellQuote(launchdDomain)
+        let plist = shellQuote(plistPath)
+        return runShell("launchctl bootstrap \(domain) \(plist) 2>/dev/null || launchctl load \(plist)")
+    }
+
+    private func killBotProcesses() {
+        let escapedDir = botDir.replacingOccurrences(of: "'", with: "'\\''")
+        runShell("pkill -f '\(escapedDir)/.*/dist/index.js|\(escapedDir)/dist/index.js|\(escapedDir)/mac-start.sh --fg|node dist/index.js' 2>/dev/null")
     }
 
     @discardableResult

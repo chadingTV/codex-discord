@@ -122,9 +122,9 @@ echo ""
 if [ "$NEED_RESTART" = true ]; then
   echo "⚠ Next steps:"
   echo "  1. Run 'codex login' to log in to Codex"
-  echo "  2. Run '$START_SCRIPT' to start the bot"
+  echo "  2. Run '$START_SCRIPT' to open the control panel"
 else
-  echo "Starting bot..."
+  echo "Starting control panel..."
   echo ""
   exec $START_SCRIPT
 fi
