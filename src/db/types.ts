@@ -5,6 +5,8 @@ export interface Project {
   project_path: string;
   guild_id: string;
   auto_approve: number;
+  model: string | null;
+  reasoning_effort: string | null;
   created_at: string;
 }
 

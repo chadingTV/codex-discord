@@ -29,6 +29,21 @@ export function initDatabase(): void {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Add per-channel Codex settings to existing databases.
+  const columns = db
+    .prepare("PRAGMA table_info(projects)")
+    .all() as { name: string }[];
+
+  if (!columns.some((column) => column.name === "model")) {
+    db.exec("ALTER TABLE projects ADD COLUMN model TEXT DEFAULT NULL");
+  }
+
+  if (!columns.some((column) => column.name === "reasoning_effort")) {
+    db.exec(
+      "ALTER TABLE projects ADD COLUMN reasoning_effort TEXT DEFAULT NULL",
+    );
+  }
 }
 
 export function getDb(): Database.Database {
@@ -42,8 +57,11 @@ export function registerProject(
   guildId: string,
 ): void {
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO projects (channel_id, project_path, guild_id)
+    INSERT INTO projects (channel_id, project_path, guild_id)
     VALUES (?, ?, ?)
+    ON CONFLICT(channel_id) DO UPDATE SET
+      project_path = excluded.project_path,
+      guild_id = excluded.guild_id
   `);
   stmt.run(channelId, projectPath, guildId);
 }
@@ -73,6 +91,24 @@ export function setAutoApprove(
     autoApprove ? 1 : 0,
     channelId,
   );
+}
+
+export function setProjectModel(
+  channelId: string,
+  model: string | null,
+): void {
+  db.prepare(
+    "UPDATE projects SET model = ? WHERE channel_id = ?",
+  ).run(model, channelId);
+}
+
+export function setProjectReasoningEffort(
+  channelId: string,
+  effort: string | null,
+): void {
+  db.prepare(
+    "UPDATE projects SET reasoning_effort = ? WHERE channel_id = ?",
+  ).run(effort, channelId);
 }
 
 // Session queries

@@ -188,10 +188,69 @@ export class SessionManager {
       dbId,
     });
 
+    let modelCatalog: Awaited<ReturnType<typeof codexAppServer.listModels>>;
+
     try {
-      await codexAppServer.startTurn(threadId, prompt);
+      modelCatalog = await codexAppServer.listModels();
     } catch (error) {
-      await channel.send(`❌ ${error instanceof Error ? error.message : "Failed to start Codex turn"}`);
+      const message = error instanceof Error
+        ? error.message
+        : "Unknown model catalog error";
+
+      console.error("Failed to retrieve Codex models:", error);
+      await currentMessage.edit({
+        content: `❌ Failed to retrieve Codex models: ${message}`,
+        components: [],
+      }).catch(() => {});
+
+      updateSessionStatus(channelId, "offline");
+      this.finishSession(channelId);
+      return;
+    }
+    const selectedModel = project.model
+      ? modelCatalog.data.find(
+          (model) => model.model === project.model,
+        )
+      : modelCatalog.data.find((model) => model.isDefault);
+
+    if (!selectedModel) {
+      await currentMessage.edit({
+        content: "❌ Could not determine the Codex model. Use /model to select an available model.",
+        components: [],
+      }).catch(() => {});
+
+      updateSessionStatus(channelId, "offline");
+      this.finishSession(channelId);
+      return;
+    }
+
+    const effectiveEffort =
+      project.reasoning_effort &&
+      selectedModel.supportedReasoningEfforts.some(
+        (option) => option.reasoningEffort === project.reasoning_effort,
+      )
+        ? project.reasoning_effort
+        : selectedModel.defaultReasoningEffort;
+
+    try {
+      await codexAppServer.startTurn(
+        threadId,
+        prompt,
+        selectedModel.model,
+        effectiveEffort,
+      );
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Failed to start Codex turn";
+
+      console.error("Failed to start Codex turn:", error);
+
+      await currentMessage.edit({
+        content: `❌ ${message}`,
+        components: [],
+      }).catch(() => {});
+
       updateSessionStatus(channelId, "offline");
       this.finishSession(channelId);
     }

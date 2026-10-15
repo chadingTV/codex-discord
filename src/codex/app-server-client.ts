@@ -268,16 +268,70 @@ export class CodexAppServerClient extends EventEmitter {
     return result.thread;
   }
 
-  async startTurn(threadId: string, prompt: string): Promise<{ id: string }> {
+  async startTurn(
+    threadId: string,
+    prompt: string,
+    model?: string | null,
+    effort?: string | null,
+  ): Promise<{ id: string }> {
     const result = await this.request<{ turn: { id: string } }>("turn/start", {
       threadId,
       input: [{ type: "text", text: prompt }],
+      ...(model != null ? { model } : {}),
+      ...(effort != null ? { effort } : {}),
     });
     return result.turn;
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     await this.request("turn/interrupt", { threadId, turnId });
+  }
+
+
+  async listModels(): Promise<{
+    data: Array<{
+      id: string;
+      model: string;
+      displayName: string;
+      hidden: boolean;
+      isDefault: boolean;
+      defaultReasoningEffort: string;
+      supportedReasoningEfforts: Array<{
+        reasoningEffort: string;
+        description: string;
+      }>;
+    }>;
+    nextCursor: string | null;
+  }> {
+    const models: Array<{
+      id: string;
+      model: string;
+      displayName: string;
+      hidden: boolean;
+      isDefault: boolean;
+      defaultReasoningEffort: string;
+      supportedReasoningEfforts: Array<{
+        reasoningEffort: string;
+        description: string;
+      }>;
+    }> = [];
+
+    let cursor: string | null = null;
+
+    do {
+      const result: {
+        data: typeof models;
+        nextCursor: string | null;
+      } = await this.request("model/list", {
+        cursor,
+        includeHidden: false,
+      });
+
+      models.push(...result.data);
+      cursor = result.nextCursor;
+    } while (cursor);
+
+    return { data: models, nextCursor: null };
   }
 
   async readRateLimits(): Promise<CodexRateLimitsResponse> {

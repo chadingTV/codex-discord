@@ -19,6 +19,8 @@ import {
   getProject,
   getAllProjects,
   setAutoApprove,
+  setProjectModel,
+  setProjectReasoningEffort,
   upsertSession,
   getSession,
   updateSessionStatus,
@@ -42,11 +44,22 @@ describe("database", () => {
       expect(project!.auto_approve).toBe(0);
     });
 
-    it("registerProject with same channelId replaces existing", () => {
+    it("re-registering a channel preserves its settings", () => {
       registerProject("ch1", "/old/path", "guild1");
-      registerProject("ch1", "/new/path", "guild1");
+
+      setProjectModel("ch1", "gpt-5.3-codex");
+      setProjectReasoningEffort("ch1", "high");
+      setAutoApprove("ch1", true);
+
+      registerProject("ch1", "/new/path", "guild2");
+
       const project = getProject("ch1");
+      expect(project).toBeDefined();
       expect(project!.project_path).toBe("/new/path");
+      expect(project!.guild_id).toBe("guild2");
+      expect(project!.model).toBe("gpt-5.3-codex");
+      expect(project!.reasoning_effort).toBe("high");
+      expect(project!.auto_approve).toBe(1);
     });
 
     it("getProject returns undefined for non-existent channel", () => {
@@ -80,6 +93,34 @@ describe("database", () => {
       setAutoApprove("ch1", false);
       expect(getProject("ch1")!.auto_approve).toBe(0);
     });
+
+    it("setProjectModel saves and clears the selected model", () => {
+      registerProject("ch1", "/p1", "guild1");
+
+      expect(getProject("ch1")!.model).toBeNull();
+
+      setProjectModel("ch1", "gpt-5.3-codex");
+      expect(getProject("ch1")!.model).toBe("gpt-5.3-codex");
+
+      setProjectModel("ch1", null);
+      expect(getProject("ch1")!.model).toBeNull();
+    });
+
+    it("setProjectReasoningEffort saves and clears reasoning effort", () => {
+      registerProject("ch1", "/p1", "guild1");
+
+      expect(getProject("ch1")!.reasoning_effort).toBeNull();
+
+      setProjectReasoningEffort("ch1", "high");
+      expect(getProject("ch1")!.reasoning_effort).toBe("high");
+
+      setProjectReasoningEffort("ch1", "medium");
+      expect(getProject("ch1")!.reasoning_effort).toBe("medium");
+
+      setProjectReasoningEffort("ch1", null);
+      expect(getProject("ch1")!.reasoning_effort).toBeNull();
+    });
+
   });
 
   // ─── Session CRUD ───

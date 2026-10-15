@@ -17,13 +17,28 @@ import * as unregisterCmd from "./commands/unregister.js";
 import * as statusCmd from "./commands/status.js";
 import * as stopCmd from "./commands/stop.js";
 import * as autoApproveCmd from "./commands/auto-approve.js";
+import * as modelCmd from "./commands/model.js";
+import * as reasoningCmd from "./commands/reasoning.js";
 import * as sessionsCmd from "./commands/sessions.js";
 import * as clearSessionsCmd from "./commands/clear-sessions.js";
 import * as lastCmd from "./commands/last.js";
 import * as queueCmd from "./commands/queue.js";
 import * as usageCmd from "./commands/usage.js";
 
-const commands = [registerCmd, unregisterCmd, statusCmd, stopCmd, autoApproveCmd, sessionsCmd, clearSessionsCmd, lastCmd, queueCmd, usageCmd];
+const commands = [
+  registerCmd,
+  unregisterCmd,
+  statusCmd,
+  stopCmd,
+  autoApproveCmd,
+  modelCmd,
+  reasoningCmd,
+  sessionsCmd,
+  clearSessionsCmd,
+  lastCmd,
+  queueCmd,
+  usageCmd,
+];
 const commandMap = new Collection<
   string,
   { execute: (interaction: ChatInputCommandInteraction) => Promise<void> }
@@ -65,6 +80,11 @@ export async function startBot(): Promise<Client> {
   client.on("interactionCreate", async (interaction: Interaction) => {
     try {
       if (interaction.isAutocomplete()) {
+        if (!isAllowedUser(interaction.user.id)) {
+          await interaction.respond([]);
+          return;
+        }
+
         const command = commandMap.get(interaction.commandName);
         if (command && "autocomplete" in command) {
           await (command as any).autocomplete(interaction);
