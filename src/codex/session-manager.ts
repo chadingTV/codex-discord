@@ -338,12 +338,42 @@ export class SessionManager {
     }
 
     const project = getProject(active.channelId);
+
+    if (msg.method === "mcpServer/elicitation/request") {
+      const decision = project?.auto_approve
+        ? "accept"
+        : await this.requestApproval(
+            active.channel,
+            active.channelId,
+            msg.id,
+            msg.method,
+            msg.params,
+          );
+
+      await codexAppServer.respond(msg.id, {
+        action: decision === "accept" || decision === "acceptForSession"
+          ? "accept"
+          : decision === "cancel"
+            ? "cancel"
+            : "decline",
+        content: null,
+        _meta: null,
+      });
+      return;
+    }
+
     if (project?.auto_approve) {
       await codexAppServer.respond(msg.id, { decision: "acceptForSession" });
       return;
     }
 
-    const decision = await this.requestApproval(active.channel, active.channelId, msg.id, msg.method, msg.params);
+    const decision = await this.requestApproval(
+      active.channel,
+      active.channelId,
+      msg.id,
+      msg.method,
+      msg.params,
+    );
     await codexAppServer.respond(msg.id, { decision });
   }
 
